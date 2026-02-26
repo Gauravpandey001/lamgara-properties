@@ -1,4 +1,6 @@
 import express from 'express'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import cors from 'cors'
 import dotenv from 'dotenv'
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3'
@@ -9,6 +11,9 @@ dotenv.config()
 
 const app = express()
 const port = Number(process.env.PORT || 4000)
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+const staticRoot = path.resolve(__dirname, '../dist')
 
 const requiredEnv = [
   'AWS_REGION',
@@ -73,7 +78,7 @@ const safeName = (value) =>
     .replace(/-+/g, '-')
     .replace(/^-|-$/g, '')
 
-const allowedFolders = new Set(['hero', 'listings', 'spotlight'])
+const allowedFolders = new Set(['hero', 'listings', 'spotlight', 'blogs'])
 
 app.post('/api/uploads/presign', async (req, res) => {
   if (missingEnv.length) {
@@ -124,6 +129,11 @@ app.post('/api/uploads/presign', async (req, res) => {
     console.error('presign_failed', error)
     res.status(500).json({ error: 'Failed to create upload URL' })
   }
+})
+
+app.use(express.static(staticRoot))
+app.get(/^\/(?!api).*/, (_req, res) => {
+  res.sendFile(path.join(staticRoot, 'index.html'))
 })
 
 app.listen(port, () => {
