@@ -12,7 +12,7 @@ export const defaultContent = {
   },
   contact: {
     phone: '+91 7060638250',
-    email: 'info@lamgaraproperties.com',
+    email: 'lamgaraproperties@gmail.com',
     address: 'Tehri Garhwal, Uttarakhand',
   },
   listings: [
