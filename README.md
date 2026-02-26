@@ -1,16 +1,68 @@
-# React + Vite
+# Lamgara Properties
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Mobile-first property website with an admin panel, backend API, and AWS S3 image uploads.
 
-Currently, two official plugins are available:
+## Stack
+- Frontend: React + Vite
+- Backend: Node + Express
+- Database: SQLite (file-backed)
+- Media: AWS S3 (`lamgara-media-prod`)
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+## Data Storage
+- Website content (hero, listings, spotlight, videos) is stored in SQLite DB.
+- Uploaded images are stored in S3.
+- Admin saves all content updates through backend API.
 
-## React Compiler
+## Environment
+Create `.env`:
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+```env
+PORT=4000
+AWS_REGION=eu-north-1
+AWS_ACCESS_KEY_ID=YOUR_AWS_ACCESS_KEY_ID
+AWS_SECRET_ACCESS_KEY=YOUR_AWS_SECRET_ACCESS_KEY
+S3_BUCKET=lamgara-media-prod
+# Optional CloudFront/media domain
+# S3_PUBLIC_BASE_URL=https://dxxxxxx.cloudfront.net
+# Optional custom SQLite location
+# SQLITE_DB_PATH=./server/data/lamgara.db
+```
 
-## Expanding the ESLint configuration
+Optional frontend API base (only needed when frontend and backend are different origins):
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+```env
+VITE_API_BASE_URL=http://localhost:4000
+```
+
+## Run Locally
+Install dependencies:
+
+```bash
+npm install
+```
+
+Start backend API:
+
+```bash
+npm run dev:server
+```
+
+Start frontend:
+
+```bash
+npm run dev:client
+```
+
+Vite proxies `/api` to `http://localhost:4000` in development.
+
+## API Endpoints
+- `GET /api/health`
+- `GET /api/content`
+- `PUT /api/content`
+- `POST /api/uploads/presign`
+
+## Admin Flow
+1. Open `/admin`.
+2. Upload images (S3) and edit content.
+3. Click **Save All Changes**.
+4. Content persists in SQLite and is served to all clients.

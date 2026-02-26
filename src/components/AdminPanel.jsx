@@ -7,183 +7,193 @@ const emptyListing = {
   location: '',
   size: '',
   category: '',
+  description: '',
   price: '',
   status: 'For Sale',
   featured: true,
   image: '',
+  images: [],
+  videoIframe: '',
 }
 
 const emptySpotlight = {
   title: '',
   location: '',
+  description: '',
   price: '',
   status: 'For Sale',
   image: '',
+  images: [],
+  videoIframe: '',
 }
 
-const emptyVideo = {
+const emptyBlog = {
   title: '',
-  iframe: '',
+  category: 'Market Insight',
+  date: new Date().toISOString().slice(0, 10),
+  excerpt: '',
+  content: '',
+  image: '',
+  images: [],
 }
 
-function AdminPanel({ content, setContent }) {
+const apiBase = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')
+const presignEndpoint = apiBase ? `${apiBase}/api/uploads/presign` : '/api/uploads/presign'
+
+const normalizeImages = (item) => {
+  if (Array.isArray(item.images) && item.images.length) return item.images
+  if (item.image) return [item.image]
+  return []
+}
+
+const moveImage = (images, fromIndex, direction) => {
+  const toIndex = fromIndex + direction
+  if (toIndex < 0 || toIndex >= images.length) return images
+  const next = [...images]
+  const [moved] = next.splice(fromIndex, 1)
+  next.splice(toIndex, 0, moved)
+  return next
+}
+
+function AdminPanel({ content, setContent, saveContent, saveState }) {
   const [newListing, setNewListing] = useState(emptyListing)
   const [newSpotlight, setNewSpotlight] = useState(emptySpotlight)
-  const [newVideo, setNewVideo] = useState(emptyVideo)
+  const [newBlog, setNewBlog] = useState(emptyBlog)
+  const [uploadState, setUploadState] = useState({ key: '', message: '' })
 
-  const updateTopLevel = (key, value) => {
-    setContent((prev) => ({ ...prev, [key]: value }))
+  const setUploading = (key, message) => setUploadState({ key, message })
+
+  const uploadImageToS3 = async (file, folder) => {
+    const presign = await fetch(presignEndpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filename: file.name,
+        contentType: file.type || '',
+        folder,
+      }),
+    })
+
+    if (!presign.ok) {
+      throw new Error('Could not generate upload URL')
+    }
+
+    const { uploadUrl, fileUrl } = await presign.json()
+
+    const upload = await fetch(uploadUrl, {
+      method: 'PUT',
+      headers: file.type ? { 'Content-Type': file.type } : {},
+      body: file,
+    })
+
+    if (!upload.ok) {
+      throw new Error('Upload failed. Check S3 CORS/IAM settings.')
+    }
+
+    return fileUrl
   }
 
-  const updateNested = (section, key, value) => {
-    setContent((prev) => ({
-      ...prev,
-      [section]: {
-        ...prev[section],
-        [key]: value,
-      },
-    }))
+  const uploadAndPersist = async (file, folder, key, updateContent) => {
+    if (!file) return
+
+    try {
+      setUploading(key, 'Uploading...')
+      const imageUrl = await uploadImageToS3(file, folder)
+      let nextContent
+      setContent((prev) => {
+        nextContent = updateContent(prev, imageUrl)
+        return nextContent
+      })
+      const ok = await saveContent(nextContent)
+      if (!ok) throw new Error('Upload succeeded but save failed')
+      setUploading('', 'Uploaded and saved.')
+    } catch (error) {
+      setUploading('', error instanceof Error ? error.message : 'Upload failed')
+    }
   }
 
-  const updateArrayFromCsv = (key, value) => {
-    const values = value
-      .split(',')
-      .map((item) => item.trim())
-      .filter(Boolean)
-    updateTopLevel(key, values)
+  const uploadDraft = async (file, folder, key, applyDraft) => {
+    if (!file) return
+
+    try {
+      setUploading(key, 'Uploading...')
+      const imageUrl = await uploadImageToS3(file, folder)
+      applyDraft(imageUrl)
+      setUploading('', 'Uploaded. Add item to save it to DB.')
+    } catch (error) {
+      setUploading('', error instanceof Error ? error.message : 'Upload failed')
+    }
   }
 
   const addListing = () => {
     if (!newListing.title || !newListing.location || !newListing.price) return
-    setContent((prev) => ({
-      ...prev,
-      listings: [{ id: `l-${Date.now()}`, ...newListing }, ...prev.listings],
-    }))
+    const next = {
+      ...content,
+      listings: [{ id: `l-${Date.now()}`, ...newListing }, ...content.listings],
+    }
+    setContent(next)
     setNewListing(emptyListing)
-  }
-
-  const updateListing = (id, key, value) => {
-    setContent((prev) => ({
-      ...prev,
-      listings: prev.listings.map((item) =>
-        item.id === id ? { ...item, [key]: value } : item,
-      ),
-    }))
-  }
-
-  const removeListing = (id) => {
-    setContent((prev) => ({
-      ...prev,
-      listings: prev.listings.filter((item) => item.id !== id),
-    }))
   }
 
   const addSpotlight = () => {
     if (!newSpotlight.title || !newSpotlight.location || !newSpotlight.price) return
-    setContent((prev) => ({
-      ...prev,
-      spotlight: [{ id: `s-${Date.now()}`, ...newSpotlight }, ...prev.spotlight],
-    }))
+    const next = {
+      ...content,
+      spotlight: [{ id: `s-${Date.now()}`, ...newSpotlight }, ...content.spotlight],
+    }
+    setContent(next)
     setNewSpotlight(emptySpotlight)
   }
 
-  const updateSpotlight = (id, key, value) => {
-    setContent((prev) => ({
-      ...prev,
-      spotlight: prev.spotlight.map((item) =>
-        item.id === id ? { ...item, [key]: value } : item,
-      ),
-    }))
-  }
-
-  const removeSpotlight = (id) => {
-    setContent((prev) => ({
-      ...prev,
-      spotlight: prev.spotlight.filter((item) => item.id !== id),
-    }))
-  }
-
-  const addVideo = () => {
-    if (!newVideo.title || !newVideo.iframe) return
-    setContent((prev) => ({
-      ...prev,
-      videos: [{ id: `v-${Date.now()}`, ...newVideo }, ...(prev.videos || [])],
-    }))
-    setNewVideo(emptyVideo)
-  }
-
-  const updateVideo = (id, key, value) => {
-    setContent((prev) => ({
-      ...prev,
-      videos: (prev.videos || []).map((item) =>
-        item.id === id ? { ...item, [key]: value } : item,
-      ),
-    }))
-  }
-
-  const removeVideo = (id) => {
-    setContent((prev) => ({
-      ...prev,
-      videos: (prev.videos || []).filter((item) => item.id !== id),
-    }))
+  const addBlog = () => {
+    if (!newBlog.title || !newBlog.excerpt || !newBlog.content) return
+    const next = {
+      ...content,
+      blogs: [{ id: `b-${Date.now()}`, ...newBlog }, ...(content.blogs || [])],
+    }
+    setContent(next)
+    setNewBlog(emptyBlog)
   }
 
   return (
-    <div className="admin-page">
+    <div className="admin-shell">
       <aside className="admin-sidebar">
-        <h2>Admin Panel</h2>
-        <p>Manage website content (no login).</p>
-        <Link to="/" className="admin-link">
-          Open Public Site
+        <h2>Admin</h2>
+        <p>Edit content, upload images, then save.</p>
+        <Link to="/" className="button outline">
+          Open Website
         </Link>
+        <button type="button" className="button" onClick={() => saveContent()}>
+          Save All Changes
+        </button>
         <button
           type="button"
-          className="danger-btn"
+          className="button ghost"
           onClick={() => setContent(defaultContent)}
         >
-          Reset Demo Content
+          Reset Demo
         </button>
+        {saveState ? <p className="note">{saveState}</p> : null}
+        {uploadState.message ? <p className="note">{uploadState.message}</p> : null}
       </aside>
 
       <main className="admin-main">
-        <section className="admin-card">
-          <h3>Brand + Navigation</h3>
-          <div className="admin-grid two-col">
+        <section className="panel">
+          <h3>Brand & Hero</h3>
+          <div className="admin-grid">
             <label>
-              Brand Name
+              Brand
               <input
                 value={content.brand}
-                onChange={(event) => updateTopLevel('brand', event.target.value)}
+                onChange={(e) => setContent({ ...content, brand: e.target.value })}
               />
             </label>
-            <label>
-              Navigation (comma separated)
-              <input
-                value={content.navItems.join(', ')}
-                onChange={(event) => updateArrayFromCsv('navItems', event.target.value)}
-              />
-            </label>
-            <label>
-              Property Types (comma separated)
-              <input
-                value={content.propertyTypes.join(', ')}
-                onChange={(event) =>
-                  updateArrayFromCsv('propertyTypes', event.target.value)
-                }
-              />
-            </label>
-          </div>
-        </section>
-
-        <section className="admin-card">
-          <h3>Hero + Contact</h3>
-          <div className="admin-grid two-col">
             <label>
               Hero Kicker
               <input
                 value={content.hero.kicker}
-                onChange={(event) =>
-                  updateNested('hero', 'kicker', event.target.value)
+                onChange={(e) =>
+                  setContent({ ...content, hero: { ...content.hero, kicker: e.target.value } })
                 }
               />
             </label>
@@ -191,190 +201,401 @@ function AdminPanel({ content, setContent }) {
               Hero Title
               <input
                 value={content.hero.title}
-                onChange={(event) => updateNested('hero', 'title', event.target.value)}
+                onChange={(e) =>
+                  setContent({ ...content, hero: { ...content.hero, title: e.target.value } })
+                }
               />
             </label>
-            <label className="full-col">
+            <label className="span-2">
               Hero Description
               <textarea
                 rows="3"
                 value={content.hero.description}
-                onChange={(event) =>
-                  updateNested('hero', 'description', event.target.value)
+                onChange={(e) =>
+                  setContent({
+                    ...content,
+                    hero: { ...content.hero, description: e.target.value },
+                  })
                 }
               />
             </label>
-            <label className="full-col">
-              Hero Image URL (GCP)
+            <div className="uploader span-2">
+              <p>Hero Image</p>
               <input
-                value={content.hero.image || ''}
-                onChange={(event) => updateNested('hero', 'image', event.target.value)}
-                placeholder="https://storage.googleapis.com/..."
+                type="file"
+                accept="image/*"
+                onChange={async (e) => {
+                  const file = e.target.files?.[0]
+                  await uploadAndPersist(file, 'hero', 'hero', (prev, url) => ({
+                    ...prev,
+                    hero: {
+                      ...prev.hero,
+                      image: url,
+                    },
+                  }))
+                  e.target.value = ''
+                }}
               />
-            </label>
-            {content.hero.image && (
-              <div className="full-col admin-image-preview">
-                <img src={content.hero.image} alt="Hero preview" />
+              {uploadState.key === 'hero' ? <small>{uploadState.message}</small> : null}
+            </div>
+            {content.hero.image ? (
+              <div className="preview span-2">
+                <img src={content.hero.image} alt="Hero" />
               </div>
-            )}
-            <label>
-              Phone
-              <input
-                value={content.contact.phone}
-                onChange={(event) =>
-                  updateNested('contact', 'phone', event.target.value)
-                }
-              />
-            </label>
-            <label>
-              Email
-              <input
-                value={content.contact.email}
-                onChange={(event) =>
-                  updateNested('contact', 'email', event.target.value)
-                }
-              />
-            </label>
-            <label className="full-col">
-              Address
-              <input
-                value={content.contact.address}
-                onChange={(event) =>
-                  updateNested('contact', 'address', event.target.value)
-                }
-              />
-            </label>
+            ) : null}
           </div>
         </section>
 
-        <section className="admin-card">
-          <h3>Featured Properties (GCP Image URLs)</h3>
-          <div className="admin-grid two-col add-row">
+        <section className="panel">
+          <h3>Add Listing</h3>
+          <div className="admin-grid">
             <input
               placeholder="Title"
               value={newListing.title}
-              onChange={(event) =>
-                setNewListing((prev) => ({ ...prev, title: event.target.value }))
-              }
+              onChange={(e) => setNewListing({ ...newListing, title: e.target.value })}
             />
             <input
               placeholder="Location"
               value={newListing.location}
-              onChange={(event) =>
-                setNewListing((prev) => ({ ...prev, location: event.target.value }))
-              }
+              onChange={(e) => setNewListing({ ...newListing, location: e.target.value })}
             />
             <input
               placeholder="Size"
               value={newListing.size}
-              onChange={(event) =>
-                setNewListing((prev) => ({ ...prev, size: event.target.value }))
-              }
+              onChange={(e) => setNewListing({ ...newListing, size: e.target.value })}
             />
             <input
               placeholder="Category"
               value={newListing.category}
-              onChange={(event) =>
-                setNewListing((prev) => ({ ...prev, category: event.target.value }))
-              }
+              onChange={(e) => setNewListing({ ...newListing, category: e.target.value })}
+            />
+            <textarea
+              className="span-2"
+              rows="3"
+              placeholder="Description"
+              value={newListing.description}
+              onChange={(e) => setNewListing({ ...newListing, description: e.target.value })}
             />
             <input
               placeholder="Price"
               value={newListing.price}
-              onChange={(event) =>
-                setNewListing((prev) => ({ ...prev, price: event.target.value }))
-              }
+              onChange={(e) => setNewListing({ ...newListing, price: e.target.value })}
             />
             <select
               value={newListing.status}
-              onChange={(event) =>
-                setNewListing((prev) => ({ ...prev, status: event.target.value }))
-              }
+              onChange={(e) => setNewListing({ ...newListing, status: e.target.value })}
             >
               <option>For Sale</option>
               <option>New Listing</option>
               <option>Hot Listing</option>
             </select>
-            <input
-              className="full-col"
-              placeholder="GCP Image URL (https://storage.googleapis.com/...)"
-              value={newListing.image}
-              onChange={(event) =>
-                setNewListing((prev) => ({ ...prev, image: event.target.value }))
-              }
+            <textarea
+              className="span-2"
+              rows="3"
+              placeholder="YouTube iframe (optional)"
+              value={newListing.videoIframe}
+              onChange={(e) => setNewListing({ ...newListing, videoIframe: e.target.value })}
             />
+            <div className="uploader span-2">
+              <p>Listing Image</p>
+              <input
+                type="file"
+                accept="image/*"
+                onChange={async (e) => {
+                  const file = e.target.files?.[0]
+                  await uploadDraft(file, 'listings', 'new-listing', (url) =>
+                    setNewListing((prev) => ({
+                      ...prev,
+                      image: prev.image || url,
+                      images: [...(prev.images || []), url],
+                    })),
+                  )
+                  e.target.value = ''
+                }}
+              />
+              {newListing.images?.length ? (
+                <small>{newListing.images.length} image(s) attached.</small>
+              ) : null}
+            </div>
+            {newListing.images?.length ? (
+              <div className="gallery span-2">
+                {newListing.images.map((img, idx) => (
+                  <div key={`new-listing-${idx}`} className="gallery-item">
+                    <div className="gallery-preview" style={{ backgroundImage: `url(${img})` }} />
+                    <div className="gallery-actions">
+                      <button
+                        type="button"
+                        className="button tiny"
+                        disabled={idx === 0}
+                        onClick={() =>
+                          setNewListing((prev) => {
+                            const nextImages = moveImage(prev.images || [], idx, -1)
+                            return {
+                              ...prev,
+                              images: nextImages,
+                              image: nextImages[0] || '',
+                            }
+                          })
+                        }
+                      >
+                        Move Left
+                      </button>
+                      <button
+                        type="button"
+                        className="button tiny"
+                        disabled={idx === newListing.images.length - 1}
+                        onClick={() =>
+                          setNewListing((prev) => {
+                            const nextImages = moveImage(prev.images || [], idx, 1)
+                            return {
+                              ...prev,
+                              images: nextImages,
+                              image: nextImages[0] || '',
+                            }
+                          })
+                        }
+                      >
+                        Move Right
+                      </button>
+                    </div>
+                    <button
+                      type="button"
+                      className="button ghost tiny"
+                      onClick={() =>
+                        setNewListing((prev) => {
+                          const nextImages = prev.images.filter((_, i) => i !== idx)
+                          return {
+                            ...prev,
+                            images: nextImages,
+                            image: nextImages[0] || '',
+                          }
+                        })
+                      }
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </div>
-          <button type="button" className="primary-btn" onClick={addListing}>
-            Add Property
+          <button type="button" className="button" onClick={addListing}>
+            Add Listing
           </button>
+        </section>
 
-          <div className="admin-list">
+        <section className="panel">
+          <h3>Manage Listings</h3>
+          <div className="stack">
             {content.listings.map((item) => (
-              <article key={item.id} className="manage-item">
-                <div className="admin-grid two-col">
+              <article className="editor" key={item.id}>
+                <div className="admin-grid">
                   <input
                     value={item.title}
-                    onChange={(event) =>
-                      updateListing(item.id, 'title', event.target.value)
+                    onChange={(e) =>
+                      setContent({
+                        ...content,
+                        listings: content.listings.map((x) =>
+                          x.id === item.id ? { ...x, title: e.target.value } : x,
+                        ),
+                      })
                     }
                   />
                   <input
                     value={item.location}
-                    onChange={(event) =>
-                      updateListing(item.id, 'location', event.target.value)
+                    onChange={(e) =>
+                      setContent({
+                        ...content,
+                        listings: content.listings.map((x) =>
+                          x.id === item.id ? { ...x, location: e.target.value } : x,
+                        ),
+                      })
                     }
                   />
                   <input
                     value={item.size}
-                    onChange={(event) => updateListing(item.id, 'size', event.target.value)}
+                    onChange={(e) =>
+                      setContent({
+                        ...content,
+                        listings: content.listings.map((x) =>
+                          x.id === item.id ? { ...x, size: e.target.value } : x,
+                        ),
+                      })
+                    }
                   />
                   <input
                     value={item.category}
-                    onChange={(event) =>
-                      updateListing(item.id, 'category', event.target.value)
+                    onChange={(e) =>
+                      setContent({
+                        ...content,
+                        listings: content.listings.map((x) =>
+                          x.id === item.id ? { ...x, category: e.target.value } : x,
+                        ),
+                      })
+                    }
+                  />
+                  <textarea
+                    className="span-2"
+                    rows="3"
+                    value={item.description || ''}
+                    onChange={(e) =>
+                      setContent({
+                        ...content,
+                        listings: content.listings.map((x) =>
+                          x.id === item.id ? { ...x, description: e.target.value } : x,
+                        ),
+                      })
                     }
                   />
                   <input
                     value={item.price}
-                    onChange={(event) => updateListing(item.id, 'price', event.target.value)}
+                    onChange={(e) =>
+                      setContent({
+                        ...content,
+                        listings: content.listings.map((x) =>
+                          x.id === item.id ? { ...x, price: e.target.value } : x,
+                        ),
+                      })
+                    }
                   />
                   <select
                     value={item.status}
-                    onChange={(event) =>
-                      updateListing(item.id, 'status', event.target.value)
+                    onChange={(e) =>
+                      setContent({
+                        ...content,
+                        listings: content.listings.map((x) =>
+                          x.id === item.id ? { ...x, status: e.target.value } : x,
+                        ),
+                      })
                     }
                   >
                     <option>For Sale</option>
                     <option>New Listing</option>
                     <option>Hot Listing</option>
                   </select>
-                  <input
-                    className="full-col"
-                    value={item.image || ''}
-                    onChange={(event) => updateListing(item.id, 'image', event.target.value)}
-                    placeholder="GCP Image URL"
+                  <textarea
+                    className="span-2"
+                    rows="3"
+                    value={item.videoIframe || ''}
+                    onChange={(e) =>
+                      setContent({
+                        ...content,
+                        listings: content.listings.map((x) =>
+                          x.id === item.id ? { ...x, videoIframe: e.target.value } : x,
+                        ),
+                      })
+                    }
                   />
-                  {item.image && (
-                    <div className="full-col admin-image-preview">
-                      <img src={item.image} alt={item.title} />
-                    </div>
-                  )}
-                </div>
-                <div className="manage-actions">
-                  <label>
+                  <div className="uploader span-2">
+                    <p>Replace Image</p>
                     <input
-                      type="checkbox"
-                      checked={item.featured}
-                      onChange={(event) =>
-                        updateListing(item.id, 'featured', event.target.checked)
-                      }
+                      type="file"
+                      accept="image/*"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0]
+                        await uploadAndPersist(file, 'listings', `listing-${item.id}`, (prev, url) => ({
+                          ...prev,
+                          listings: prev.listings.map((x) =>
+                            x.id === item.id
+                              ? {
+                                  ...x,
+                                  image: x.image || url,
+                                  images: [...(x.images || (x.image ? [x.image] : [])), url],
+                                }
+                              : x,
+                          ),
+                        }))
+                        e.target.value = ''
+                      }}
                     />
-                    Featured
-                  </label>
+                  </div>
+                  {normalizeImages(item).length ? (
+                    <div className="gallery span-2">
+                      {normalizeImages(item).map((img, idx) => (
+                        <div key={`${item.id}-img-${idx}`} className="gallery-item">
+                          <div className="gallery-preview" style={{ backgroundImage: `url(${img})` }} />
+                          <div className="gallery-actions">
+                            <button
+                              type="button"
+                              className="button tiny"
+                              disabled={idx === 0}
+                              onClick={() =>
+                                setContent((prev) => ({
+                                  ...prev,
+                                  listings: prev.listings.map((x) => {
+                                    if (x.id !== item.id) return x
+                                    const current = normalizeImages(x)
+                                    const nextImages = moveImage(current, idx, -1)
+                                    return {
+                                      ...x,
+                                      images: nextImages,
+                                      image: nextImages[0] || '',
+                                    }
+                                  }),
+                                }))
+                              }
+                            >
+                              Move Left
+                            </button>
+                            <button
+                              type="button"
+                              className="button tiny"
+                              disabled={idx === normalizeImages(item).length - 1}
+                              onClick={() =>
+                                setContent((prev) => ({
+                                  ...prev,
+                                  listings: prev.listings.map((x) => {
+                                    if (x.id !== item.id) return x
+                                    const current = normalizeImages(x)
+                                    const nextImages = moveImage(current, idx, 1)
+                                    return {
+                                      ...x,
+                                      images: nextImages,
+                                      image: nextImages[0] || '',
+                                    }
+                                  }),
+                                }))
+                              }
+                            >
+                              Move Right
+                            </button>
+                          </div>
+                          <button
+                            type="button"
+                            className="button ghost tiny"
+                            onClick={() =>
+                              setContent((prev) => ({
+                                ...prev,
+                                listings: prev.listings.map((x) => {
+                                  if (x.id !== item.id) return x
+                                  const current = normalizeImages(x)
+                                  const nextImages = current.filter((_, i) => i !== idx)
+                                  return {
+                                    ...x,
+                                    images: nextImages,
+                                    image: nextImages[0] || '',
+                                  }
+                                }),
+                              }))
+                            }
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+                <div className="row-end">
                   <button
                     type="button"
-                    className="danger-btn"
-                    onClick={() => removeListing(item.id)}
+                    className="button ghost"
+                    onClick={() =>
+                      setContent({
+                        ...content,
+                        listings: content.listings.filter((x) => x.id !== item.id),
+                      })
+                    }
                   >
                     Delete
                   </button>
@@ -384,102 +605,314 @@ function AdminPanel({ content, setContent }) {
           </div>
         </section>
 
-        <section className="admin-card">
-          <h3>Spotlight Slider (GCP Image URLs)</h3>
-          <div className="admin-grid two-col add-row">
+        <section className="panel">
+          <h3>Add Spotlight</h3>
+          <div className="admin-grid">
             <input
               placeholder="Title"
               value={newSpotlight.title}
-              onChange={(event) =>
-                setNewSpotlight((prev) => ({ ...prev, title: event.target.value }))
-              }
+              onChange={(e) => setNewSpotlight({ ...newSpotlight, title: e.target.value })}
             />
             <input
               placeholder="Location"
               value={newSpotlight.location}
-              onChange={(event) =>
-                setNewSpotlight((prev) => ({ ...prev, location: event.target.value }))
+              onChange={(e) => setNewSpotlight({ ...newSpotlight, location: e.target.value })}
+            />
+            <textarea
+              className="span-2"
+              rows="3"
+              placeholder="Description"
+              value={newSpotlight.description}
+              onChange={(e) =>
+                setNewSpotlight({ ...newSpotlight, description: e.target.value })
               }
             />
             <input
               placeholder="Price"
               value={newSpotlight.price}
-              onChange={(event) =>
-                setNewSpotlight((prev) => ({ ...prev, price: event.target.value }))
-              }
+              onChange={(e) => setNewSpotlight({ ...newSpotlight, price: e.target.value })}
             />
             <select
               value={newSpotlight.status}
-              onChange={(event) =>
-                setNewSpotlight((prev) => ({ ...prev, status: event.target.value }))
-              }
+              onChange={(e) => setNewSpotlight({ ...newSpotlight, status: e.target.value })}
             >
               <option>For Sale</option>
               <option>New Listing</option>
               <option>Hot Listing</option>
             </select>
-            <input
-              className="full-col"
-              placeholder="GCP Image URL (https://storage.googleapis.com/...)"
-              value={newSpotlight.image}
-              onChange={(event) =>
-                setNewSpotlight((prev) => ({ ...prev, image: event.target.value }))
-              }
+            <textarea
+              className="span-2"
+              rows="3"
+              placeholder="YouTube iframe (optional)"
+              value={newSpotlight.videoIframe}
+              onChange={(e) => setNewSpotlight({ ...newSpotlight, videoIframe: e.target.value })}
             />
+            <div className="uploader span-2">
+              <p>Spotlight Image</p>
+              <input
+                type="file"
+                accept="image/*"
+                onChange={async (e) => {
+                  const file = e.target.files?.[0]
+                  await uploadDraft(file, 'spotlight', 'new-spotlight', (url) =>
+                    setNewSpotlight((prev) => ({
+                      ...prev,
+                      image: prev.image || url,
+                      images: [...(prev.images || []), url],
+                    })),
+                  )
+                  e.target.value = ''
+                }}
+              />
+              {newSpotlight.images?.length ? (
+                <small>{newSpotlight.images.length} image(s) attached.</small>
+              ) : null}
+            </div>
+            {newSpotlight.images?.length ? (
+              <div className="gallery span-2">
+                {newSpotlight.images.map((img, idx) => (
+                  <div key={`new-spotlight-${idx}`} className="gallery-item">
+                    <div className="gallery-preview" style={{ backgroundImage: `url(${img})` }} />
+                    <div className="gallery-actions">
+                      <button
+                        type="button"
+                        className="button tiny"
+                        disabled={idx === 0}
+                        onClick={() =>
+                          setNewSpotlight((prev) => {
+                            const nextImages = moveImage(prev.images || [], idx, -1)
+                            return {
+                              ...prev,
+                              images: nextImages,
+                              image: nextImages[0] || '',
+                            }
+                          })
+                        }
+                      >
+                        Move Left
+                      </button>
+                      <button
+                        type="button"
+                        className="button tiny"
+                        disabled={idx === newSpotlight.images.length - 1}
+                        onClick={() =>
+                          setNewSpotlight((prev) => {
+                            const nextImages = moveImage(prev.images || [], idx, 1)
+                            return {
+                              ...prev,
+                              images: nextImages,
+                              image: nextImages[0] || '',
+                            }
+                          })
+                        }
+                      >
+                        Move Right
+                      </button>
+                    </div>
+                    <button
+                      type="button"
+                      className="button ghost tiny"
+                      onClick={() =>
+                        setNewSpotlight((prev) => {
+                          const nextImages = prev.images.filter((_, i) => i !== idx)
+                          return {
+                            ...prev,
+                            images: nextImages,
+                            image: nextImages[0] || '',
+                          }
+                        })
+                      }
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </div>
-          <button type="button" className="primary-btn" onClick={addSpotlight}>
+          <button type="button" className="button" onClick={addSpotlight}>
             Add Spotlight
           </button>
+        </section>
 
-          <div className="admin-list">
-            {content.spotlight.map((item) => (
-              <article key={item.id} className="manage-item">
-                <div className="admin-grid two-col">
+        <section className="panel">
+          <h3>Manage Spotlight</h3>
+          <div className="stack">
+            {(content.spotlight || []).map((item) => (
+              <article className="editor" key={item.id}>
+                <div className="admin-grid">
                   <input
                     value={item.title}
-                    onChange={(event) =>
-                      updateSpotlight(item.id, 'title', event.target.value)
+                    onChange={(e) =>
+                      setContent({
+                        ...content,
+                        spotlight: (content.spotlight || []).map((x) =>
+                          x.id === item.id ? { ...x, title: e.target.value } : x,
+                        ),
+                      })
                     }
                   />
                   <input
                     value={item.location}
-                    onChange={(event) =>
-                      updateSpotlight(item.id, 'location', event.target.value)
+                    onChange={(e) =>
+                      setContent({
+                        ...content,
+                        spotlight: (content.spotlight || []).map((x) =>
+                          x.id === item.id ? { ...x, location: e.target.value } : x,
+                        ),
+                      })
+                    }
+                  />
+                  <textarea
+                    className="span-2"
+                    rows="3"
+                    value={item.description || ''}
+                    onChange={(e) =>
+                      setContent({
+                        ...content,
+                        spotlight: (content.spotlight || []).map((x) =>
+                          x.id === item.id ? { ...x, description: e.target.value } : x,
+                        ),
+                      })
                     }
                   />
                   <input
                     value={item.price}
-                    onChange={(event) =>
-                      updateSpotlight(item.id, 'price', event.target.value)
+                    onChange={(e) =>
+                      setContent({
+                        ...content,
+                        spotlight: (content.spotlight || []).map((x) =>
+                          x.id === item.id ? { ...x, price: e.target.value } : x,
+                        ),
+                      })
                     }
                   />
                   <select
                     value={item.status}
-                    onChange={(event) =>
-                      updateSpotlight(item.id, 'status', event.target.value)
+                    onChange={(e) =>
+                      setContent({
+                        ...content,
+                        spotlight: (content.spotlight || []).map((x) =>
+                          x.id === item.id ? { ...x, status: e.target.value } : x,
+                        ),
+                      })
                     }
                   >
                     <option>For Sale</option>
                     <option>New Listing</option>
                     <option>Hot Listing</option>
                   </select>
-                  <input
-                    className="full-col"
-                    value={item.image || ''}
-                    onChange={(event) => updateSpotlight(item.id, 'image', event.target.value)}
-                    placeholder="GCP Image URL"
+                  <textarea
+                    className="span-2"
+                    rows="3"
+                    value={item.videoIframe || ''}
+                    onChange={(e) =>
+                      setContent({
+                        ...content,
+                        spotlight: (content.spotlight || []).map((x) =>
+                          x.id === item.id ? { ...x, videoIframe: e.target.value } : x,
+                        ),
+                      })
+                    }
                   />
-                  {item.image && (
-                    <div className="full-col admin-image-preview">
-                      <img src={item.image} alt={item.title} />
+                  <div className="uploader span-2">
+                    <p>Upload Spotlight Image</p>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0]
+                        await uploadAndPersist(file, 'spotlight', `spotlight-${item.id}`, (prev, url) => ({
+                          ...prev,
+                          spotlight: (prev.spotlight || []).map((x) =>
+                            x.id === item.id
+                              ? {
+                                  ...x,
+                                  image: x.image || url,
+                                  images: [...(x.images || (x.image ? [x.image] : [])), url],
+                                }
+                              : x,
+                          ),
+                        }))
+                        e.target.value = ''
+                      }}
+                    />
+                  </div>
+                  {normalizeImages(item).length ? (
+                    <div className="gallery span-2">
+                      {normalizeImages(item).map((img, idx) => (
+                        <div key={`${item.id}-spotlight-img-${idx}`} className="gallery-item">
+                          <div className="gallery-preview" style={{ backgroundImage: `url(${img})` }} />
+                          <div className="gallery-actions">
+                            <button
+                              type="button"
+                              className="button tiny"
+                              disabled={idx === 0}
+                              onClick={() =>
+                                setContent((prev) => ({
+                                  ...prev,
+                                  spotlight: (prev.spotlight || []).map((x) => {
+                                    if (x.id !== item.id) return x
+                                    const current = normalizeImages(x)
+                                    const nextImages = moveImage(current, idx, -1)
+                                    return { ...x, images: nextImages, image: nextImages[0] || '' }
+                                  }),
+                                }))
+                              }
+                            >
+                              Move Left
+                            </button>
+                            <button
+                              type="button"
+                              className="button tiny"
+                              disabled={idx === normalizeImages(item).length - 1}
+                              onClick={() =>
+                                setContent((prev) => ({
+                                  ...prev,
+                                  spotlight: (prev.spotlight || []).map((x) => {
+                                    if (x.id !== item.id) return x
+                                    const current = normalizeImages(x)
+                                    const nextImages = moveImage(current, idx, 1)
+                                    return { ...x, images: nextImages, image: nextImages[0] || '' }
+                                  }),
+                                }))
+                              }
+                            >
+                              Move Right
+                            </button>
+                          </div>
+                          <button
+                            type="button"
+                            className="button ghost tiny"
+                            onClick={() =>
+                              setContent((prev) => ({
+                                ...prev,
+                                spotlight: (prev.spotlight || []).map((x) => {
+                                  if (x.id !== item.id) return x
+                                  const current = normalizeImages(x)
+                                  const nextImages = current.filter((_, i) => i !== idx)
+                                  return { ...x, images: nextImages, image: nextImages[0] || '' }
+                                }),
+                              }))
+                            }
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      ))}
                     </div>
-                  )}
+                  ) : null}
                 </div>
-                <div className="manage-actions">
+                <div className="row-end">
                   <button
                     type="button"
-                    className="danger-btn"
-                    onClick={() => removeSpotlight(item.id)}
+                    className="button ghost"
+                    onClick={() =>
+                      setContent({
+                        ...content,
+                        spotlight: (content.spotlight || []).filter((x) => x.id !== item.id),
+                      })
+                    }
                   >
                     Delete
                   </button>
@@ -489,52 +922,276 @@ function AdminPanel({ content, setContent }) {
           </div>
         </section>
 
-        <section className="admin-card">
-          <h3>Videos (YouTube Iframe)</h3>
-          <div className="admin-grid two-col add-row">
+        <section className="panel">
+          <h3>Add Blog</h3>
+          <div className="admin-grid">
             <input
-              placeholder="Video Title"
-              value={newVideo.title}
-              onChange={(event) =>
-                setNewVideo((prev) => ({ ...prev, title: event.target.value }))
-              }
+              placeholder="Title"
+              value={newBlog.title}
+              onChange={(e) => setNewBlog({ ...newBlog, title: e.target.value })}
+            />
+            <input
+              placeholder="Category"
+              value={newBlog.category}
+              onChange={(e) => setNewBlog({ ...newBlog, category: e.target.value })}
+            />
+            <input
+              type="date"
+              value={newBlog.date}
+              onChange={(e) => setNewBlog({ ...newBlog, date: e.target.value })}
             />
             <textarea
+              className="span-2"
               rows="3"
-              placeholder="Paste YouTube iframe code"
-              value={newVideo.iframe}
-              onChange={(event) =>
-                setNewVideo((prev) => ({ ...prev, iframe: event.target.value }))
-              }
+              placeholder="Short excerpt"
+              value={newBlog.excerpt}
+              onChange={(e) => setNewBlog({ ...newBlog, excerpt: e.target.value })}
             />
+            <textarea
+              className="span-2"
+              rows="6"
+              placeholder="Full blog content"
+              value={newBlog.content}
+              onChange={(e) => setNewBlog({ ...newBlog, content: e.target.value })}
+            />
+            <div className="uploader span-2">
+              <p>Blog Images</p>
+              <input
+                type="file"
+                accept="image/*"
+                onChange={async (e) => {
+                  const file = e.target.files?.[0]
+                  await uploadDraft(file, 'blogs', 'new-blog', (url) =>
+                    setNewBlog((prev) => ({
+                      ...prev,
+                      image: prev.image || url,
+                      images: [...(prev.images || []), url],
+                    })),
+                  )
+                  e.target.value = ''
+                }}
+              />
+              {newBlog.images?.length ? <small>{newBlog.images.length} image(s) attached.</small> : null}
+            </div>
+            {newBlog.images?.length ? (
+              <div className="gallery span-2">
+                {newBlog.images.map((img, idx) => (
+                  <div key={`new-blog-${idx}`} className="gallery-item">
+                    <div className="gallery-preview" style={{ backgroundImage: `url(${img})` }} />
+                    <div className="gallery-actions">
+                      <button
+                        type="button"
+                        className="button tiny"
+                        disabled={idx === 0}
+                        onClick={() =>
+                          setNewBlog((prev) => {
+                            const nextImages = moveImage(prev.images || [], idx, -1)
+                            return { ...prev, images: nextImages, image: nextImages[0] || '' }
+                          })
+                        }
+                      >
+                        Move Left
+                      </button>
+                      <button
+                        type="button"
+                        className="button tiny"
+                        disabled={idx === newBlog.images.length - 1}
+                        onClick={() =>
+                          setNewBlog((prev) => {
+                            const nextImages = moveImage(prev.images || [], idx, 1)
+                            return { ...prev, images: nextImages, image: nextImages[0] || '' }
+                          })
+                        }
+                      >
+                        Move Right
+                      </button>
+                    </div>
+                    <button
+                      type="button"
+                      className="button ghost tiny"
+                      onClick={() =>
+                        setNewBlog((prev) => {
+                          const nextImages = prev.images.filter((_, i) => i !== idx)
+                          return { ...prev, images: nextImages, image: nextImages[0] || '' }
+                        })
+                      }
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </div>
-          <button type="button" className="primary-btn" onClick={addVideo}>
-            Add Video
+          <button type="button" className="button" onClick={addBlog}>
+            Add Blog
           </button>
+        </section>
 
-          <div className="admin-list">
-            {(content.videos || []).map((item) => (
-              <article key={item.id} className="manage-item">
-                <div className="admin-grid two-col">
+        <section className="panel">
+          <h3>Manage Blogs</h3>
+          <div className="stack">
+            {(content.blogs || []).map((item) => (
+              <article className="editor" key={item.id}>
+                <div className="admin-grid">
                   <input
                     value={item.title}
-                    onChange={(event) =>
-                      updateVideo(item.id, 'title', event.target.value)
+                    onChange={(e) =>
+                      setContent({
+                        ...content,
+                        blogs: (content.blogs || []).map((x) =>
+                          x.id === item.id ? { ...x, title: e.target.value } : x,
+                        ),
+                      })
+                    }
+                  />
+                  <input
+                    value={item.category || ''}
+                    onChange={(e) =>
+                      setContent({
+                        ...content,
+                        blogs: (content.blogs || []).map((x) =>
+                          x.id === item.id ? { ...x, category: e.target.value } : x,
+                        ),
+                      })
+                    }
+                  />
+                  <input
+                    type="date"
+                    value={item.date || ''}
+                    onChange={(e) =>
+                      setContent({
+                        ...content,
+                        blogs: (content.blogs || []).map((x) =>
+                          x.id === item.id ? { ...x, date: e.target.value } : x,
+                        ),
+                      })
                     }
                   />
                   <textarea
+                    className="span-2"
                     rows="3"
-                    value={item.iframe}
-                    onChange={(event) =>
-                      updateVideo(item.id, 'iframe', event.target.value)
+                    value={item.excerpt || ''}
+                    onChange={(e) =>
+                      setContent({
+                        ...content,
+                        blogs: (content.blogs || []).map((x) =>
+                          x.id === item.id ? { ...x, excerpt: e.target.value } : x,
+                        ),
+                      })
                     }
                   />
+                  <textarea
+                    className="span-2"
+                    rows="6"
+                    value={item.content || ''}
+                    onChange={(e) =>
+                      setContent({
+                        ...content,
+                        blogs: (content.blogs || []).map((x) =>
+                          x.id === item.id ? { ...x, content: e.target.value } : x,
+                        ),
+                      })
+                    }
+                  />
+                  <div className="uploader span-2">
+                    <p>Upload Blog Image</p>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0]
+                        await uploadAndPersist(file, 'blogs', `blog-${item.id}`, (prev, url) => ({
+                          ...prev,
+                          blogs: (prev.blogs || []).map((x) =>
+                            x.id === item.id
+                              ? {
+                                  ...x,
+                                  image: x.image || url,
+                                  images: [...(x.images || (x.image ? [x.image] : [])), url],
+                                }
+                              : x,
+                          ),
+                        }))
+                        e.target.value = ''
+                      }}
+                    />
+                  </div>
+                  {normalizeImages(item).length ? (
+                    <div className="gallery span-2">
+                      {normalizeImages(item).map((img, idx) => (
+                        <div key={`${item.id}-blog-img-${idx}`} className="gallery-item">
+                          <div className="gallery-preview" style={{ backgroundImage: `url(${img})` }} />
+                          <div className="gallery-actions">
+                            <button
+                              type="button"
+                              className="button tiny"
+                              disabled={idx === 0}
+                              onClick={() =>
+                                setContent((prev) => ({
+                                  ...prev,
+                                  blogs: (prev.blogs || []).map((x) => {
+                                    if (x.id !== item.id) return x
+                                    const current = normalizeImages(x)
+                                    const nextImages = moveImage(current, idx, -1)
+                                    return { ...x, images: nextImages, image: nextImages[0] || '' }
+                                  }),
+                                }))
+                              }
+                            >
+                              Move Left
+                            </button>
+                            <button
+                              type="button"
+                              className="button tiny"
+                              disabled={idx === normalizeImages(item).length - 1}
+                              onClick={() =>
+                                setContent((prev) => ({
+                                  ...prev,
+                                  blogs: (prev.blogs || []).map((x) => {
+                                    if (x.id !== item.id) return x
+                                    const current = normalizeImages(x)
+                                    const nextImages = moveImage(current, idx, 1)
+                                    return { ...x, images: nextImages, image: nextImages[0] || '' }
+                                  }),
+                                }))
+                              }
+                            >
+                              Move Right
+                            </button>
+                          </div>
+                          <button
+                            type="button"
+                            className="button ghost tiny"
+                            onClick={() =>
+                              setContent((prev) => ({
+                                ...prev,
+                                blogs: (prev.blogs || []).map((x) => {
+                                  if (x.id !== item.id) return x
+                                  const current = normalizeImages(x)
+                                  const nextImages = current.filter((_, i) => i !== idx)
+                                  return { ...x, images: nextImages, image: nextImages[0] || '' }
+                                }),
+                              }))
+                            }
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
-                <div className="manage-actions">
+                <div className="row-end">
                   <button
                     type="button"
-                    className="danger-btn"
-                    onClick={() => removeVideo(item.id)}
+                    className="button ghost"
+                    onClick={() =>
+                      setContent({
+                        ...content,
+                        blogs: (content.blogs || []).filter((x) => x.id !== item.id),
+                      })
+                    }
                   >
                     Delete
                   </button>
