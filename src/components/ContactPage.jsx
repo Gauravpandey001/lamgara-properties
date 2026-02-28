@@ -1,5 +1,6 @@
-import SiteHeader from './SiteHeader'
 import usePageSeo from '../hooks/usePageSeo'
+import MarketingHeader from './MarketingHeader'
+import MarketingFooter from './MarketingFooter'
 
 function ContactPage({ content }) {
   usePageSeo({
@@ -9,17 +10,17 @@ function ContactPage({ content }) {
   })
 
   return (
-    <div className="shell">
-      <SiteHeader content={content} />
-      <main className="page-main">
-        <section className="page-hero">
-          <p className="kicker">Contact</p>
+    <div className="lp-page">
+      <MarketingHeader brand={content.brand} />
+      <main className="lp-main lp-page-main">
+        <section className="lp-page-hero">
+          <p className="lp-kicker">Contact</p>
           <h2>Talk to our team for site visits, pricing, and availability.</h2>
           <p>Share your requirement and we will get back with matching options.</p>
         </section>
 
-        <section className="contact-grid">
-          <article className="info-card">
+        <section className="lp-contact-grid">
+          <article className="lp-panel">
             <h3>Direct Contact</h3>
             <p>
               Phone: <a href={`tel:${content.contact.phone}`}>{content.contact.phone}</a>
@@ -30,9 +31,9 @@ function ContactPage({ content }) {
             <p>Address: {content.contact.address}</p>
           </article>
 
-          <article className="info-card">
+          <article className="lp-panel">
             <h3>Inquiry</h3>
-            <form className="contact-form" onSubmit={(e) => e.preventDefault()}>
+            <form className="lp-contact-form" onSubmit={(e) => e.preventDefault()}>
               <input type="text" placeholder="Your Name" />
               <input type="tel" placeholder="Phone Number" />
               <input type="email" placeholder="Email Address" />
@@ -44,6 +45,7 @@ function ContactPage({ content }) {
           </article>
         </section>
       </main>
+      <MarketingFooter content={content} />
     </div>
   )
 }

@@ -1,5 +1,6 @@
-import SiteHeader from './SiteHeader'
 import usePageSeo from '../hooks/usePageSeo'
+import MarketingHeader from './MarketingHeader'
+import MarketingFooter from './MarketingFooter'
 
 function AboutPage({ content }) {
   usePageSeo({
@@ -9,11 +10,11 @@ function AboutPage({ content }) {
   })
 
   return (
-    <div className="shell">
-      <SiteHeader content={content} />
-      <main className="page-main">
-        <section className="page-hero">
-          <p className="kicker">About Lamgara Properties</p>
+    <div className="lp-page">
+      <MarketingHeader brand={content.brand} />
+      <main className="lp-main lp-page-main">
+        <section className="lp-page-hero">
+          <p className="lp-kicker">About Lamgara Properties</p>
           <h2>Local expertise for smart property decisions in Uttarakhand.</h2>
           <p>
             We help buyers identify practical land and housing opportunities with clear location
@@ -21,22 +22,22 @@ function AboutPage({ content }) {
           </p>
         </section>
 
-        <section className="page-grid">
-          <article className="info-card">
+        <section className="lp-panel-grid">
+          <article className="lp-panel">
             <h3>What We Do</h3>
             <p>
               Curated listings, site visit coordination, and documentation support for land and
               residential deals.
             </p>
           </article>
-          <article className="info-card">
+          <article className="lp-panel">
             <h3>Where We Focus</h3>
             <p>
               Tehri, Chamba, Dhanaulti, Kanatal, and nearby growth corridors with tourism and
               second-home demand.
             </p>
           </article>
-          <article className="info-card">
+          <article className="lp-panel">
             <h3>Why Clients Choose Us</h3>
             <p>
               Reliable market inputs, on-ground checks, and a direct communication model from first
@@ -45,6 +46,7 @@ function AboutPage({ content }) {
           </article>
         </section>
       </main>
+      <MarketingFooter content={content} />
     </div>
   )
 }

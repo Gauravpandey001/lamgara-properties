@@ -1,6 +1,7 @@
 import { Link, useParams } from 'react-router-dom'
-import SiteHeader from './SiteHeader'
 import usePageSeo from '../hooks/usePageSeo'
+import MarketingHeader from './MarketingHeader'
+import MarketingFooter from './MarketingFooter'
 
 const getImages = (blog) => {
   if (Array.isArray(blog.images) && blog.images.length) return blog.images
@@ -22,10 +23,10 @@ function BlogDetail({ content }) {
 
   if (!blog) {
     return (
-      <div className="shell">
-        <SiteHeader content={content} />
-        <main className="page-main">
-          <article className="info-card">
+      <div className="lp-page">
+        <MarketingHeader brand={content.brand} />
+        <main className="lp-main lp-page-main">
+          <article className="lp-panel">
             <h3>Blog not found</h3>
             <p>The requested blog entry does not exist.</p>
             <Link to="/blog" className="button outline">
@@ -33,6 +34,7 @@ function BlogDetail({ content }) {
             </Link>
           </article>
         </main>
+        <MarketingFooter content={content} />
       </div>
     )
   }
@@ -40,14 +42,14 @@ function BlogDetail({ content }) {
   const images = getImages(blog)
 
   return (
-    <div className="shell">
-      <SiteHeader content={content} />
-      <main className="page-main">
-        <article className="info-card">
+    <div className="lp-page">
+      <MarketingHeader brand={content.brand} />
+      <main className="lp-main lp-page-main">
+        <article className="lp-panel">
           {images[0] ? (
             <div className="blog-hero-image" style={{ backgroundImage: `url(${images[0]})` }} />
           ) : null}
-          <p className="kicker">{blog.category || 'Blog'}</p>
+          <p className="lp-kicker">{blog.category || 'Blog'}</p>
           <h2>{blog.title}</h2>
           <p>{blog.date || 'N/A'}</p>
           <p className="blog-body">{blog.content || blog.excerpt || ''}</p>
@@ -69,6 +71,7 @@ function BlogDetail({ content }) {
           Back to Blog
         </Link>
       </main>
+      <MarketingFooter content={content} />
     </div>
   )
 }
