@@ -11,6 +11,8 @@ const toNumberOrNull = (value) => {
   return Number.isFinite(num) ? num : null
 }
 
+const toSafeText = (value) => (typeof value === 'string' ? value : String(value ?? ''))
+
 const getCoordinates = (property) => {
   const lat = toNumberOrNull(property.latitude ?? property.lat)
   const lon = toNumberOrNull(property.longitude ?? property.lng ?? property.lon)
@@ -52,7 +54,7 @@ function PublicSite({ content }) {
   }, [content.listings, content.propertyTypes])
   const filteredListings = useMemo(() => {
     const categoryMatched = topListings.filter((property) =>
-      categoryFilter === 'All' ? true : property.category === categoryFilter,
+      categoryFilter === 'All' ? true : toSafeText(property.category) === categoryFilter,
     )
 
     if (!localityFilter) return categoryMatched
@@ -62,7 +64,7 @@ function PublicSite({ content }) {
     const others = []
 
     categoryMatched.forEach((property) => {
-      const matches = (property.location || '').toLowerCase().includes(query)
+      const matches = toSafeText(property.location).toLowerCase().includes(query)
       if (matches) {
         exact.push({ ...property, distanceKm: 0, exactLocalityMatch: true })
         return
@@ -269,7 +271,9 @@ function PublicSite({ content }) {
                       <span className="lp-distance-pill">
                         {property.exactLocalityMatch
                           ? 'Exact locality match'
-                          : `${property.distanceKm.toFixed(1)} km from ${localityFilter}`}
+                          : Number.isFinite(property.distanceKm)
+                            ? `${property.distanceKm.toFixed(1)} km from ${localityFilter}`
+                            : `Distance from ${localityFilter} unavailable`}
                       </span>
                     ) : null}
                   </p>
