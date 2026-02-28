@@ -195,6 +195,46 @@ const safeName = (value) =>
 
 const allowedFolders = new Set(['hero', 'listings', 'spotlight', 'blogs'])
 
+app.get('/api/geocode', async (req, res) => {
+  const query = String(req.query.q || '').trim()
+  if (!query) {
+    res.status(400).json({ error: 'q query is required' })
+    return
+  }
+
+  const email = process.env.NOMINATIM_EMAIL ? `&email=${encodeURIComponent(process.env.NOMINATIM_EMAIL)}` : ''
+  const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(query)}${email}`
+
+  try {
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent': 'lamgara-properties/1.0',
+      },
+    })
+
+    if (!response.ok) {
+      res.status(502).json({ error: 'Geocoding provider error' })
+      return
+    }
+
+    const data = await response.json()
+    if (!Array.isArray(data) || !data[0]) {
+      res.json({ found: false })
+      return
+    }
+
+    const first = data[0]
+    res.json({
+      found: true,
+      lat: Number(first.lat),
+      lon: Number(first.lon),
+      displayName: first.display_name || query,
+    })
+  } catch {
+    res.status(500).json({ error: 'Geocoding failed' })
+  }
+})
+
 app.post('/api/uploads/presign', requireAdmin, async (req, res) => {
   if (missingEnv.length) {
     res.status(500).json({ error: 'Missing required server env vars', missingEnv })

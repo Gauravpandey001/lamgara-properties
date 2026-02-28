@@ -5,6 +5,8 @@ import usePageSeo from '../hooks/usePageSeo'
 const emptyListing = {
   title: '',
   location: '',
+  latitude: '',
+  longitude: '',
   size: '',
   category: '',
   description: '',
@@ -19,6 +21,8 @@ const emptyListing = {
 const emptySpotlight = {
   title: '',
   location: '',
+  latitude: '',
+  longitude: '',
   description: '',
   price: '',
   status: 'For Sale',
@@ -261,9 +265,20 @@ function AdminPanel({ content, setContent, saveContent, saveState, authToken, on
               onChange={(e) => setNewListing({ ...newListing, title: e.target.value })}
             />
             <input
-              placeholder="Location"
+              placeholder="Location / Locality"
               value={newListing.location}
               onChange={(e) => setNewListing({ ...newListing, location: e.target.value })}
+              required
+            />
+            <input
+              placeholder="Latitude (e.g. 29.3803)"
+              value={newListing.latitude}
+              onChange={(e) => setNewListing({ ...newListing, latitude: e.target.value })}
+            />
+            <input
+              placeholder="Longitude (e.g. 79.4636)"
+              value={newListing.longitude}
+              onChange={(e) => setNewListing({ ...newListing, longitude: e.target.value })}
             />
             <input
               placeholder="Size"
@@ -414,6 +429,30 @@ function AdminPanel({ content, setContent, saveContent, saveState, authToken, on
                         ...content,
                         listings: content.listings.map((x) =>
                           x.id === item.id ? { ...x, location: e.target.value } : x,
+                        ),
+                      })
+                    }
+                  />
+                  <input
+                    placeholder="Latitude"
+                    value={item.latitude || ''}
+                    onChange={(e) =>
+                      setContent({
+                        ...content,
+                        listings: content.listings.map((x) =>
+                          x.id === item.id ? { ...x, latitude: e.target.value } : x,
+                        ),
+                      })
+                    }
+                  />
+                  <input
+                    placeholder="Longitude"
+                    value={item.longitude || ''}
+                    onChange={(e) =>
+                      setContent({
+                        ...content,
+                        listings: content.listings.map((x) =>
+                          x.id === item.id ? { ...x, longitude: e.target.value } : x,
                         ),
                       })
                     }
@@ -620,9 +659,20 @@ function AdminPanel({ content, setContent, saveContent, saveState, authToken, on
               onChange={(e) => setNewSpotlight({ ...newSpotlight, title: e.target.value })}
             />
             <input
-              placeholder="Location"
+              placeholder="Location / Locality"
               value={newSpotlight.location}
               onChange={(e) => setNewSpotlight({ ...newSpotlight, location: e.target.value })}
+              required
+            />
+            <input
+              placeholder="Latitude (e.g. 29.3803)"
+              value={newSpotlight.latitude}
+              onChange={(e) => setNewSpotlight({ ...newSpotlight, latitude: e.target.value })}
+            />
+            <input
+              placeholder="Longitude (e.g. 79.4636)"
+              value={newSpotlight.longitude}
+              onChange={(e) => setNewSpotlight({ ...newSpotlight, longitude: e.target.value })}
             />
             <textarea
               className="span-2"
@@ -765,6 +815,30 @@ function AdminPanel({ content, setContent, saveContent, saveState, authToken, on
                         ...content,
                         spotlight: (content.spotlight || []).map((x) =>
                           x.id === item.id ? { ...x, location: e.target.value } : x,
+                        ),
+                      })
+                    }
+                  />
+                  <input
+                    placeholder="Latitude"
+                    value={item.latitude || ''}
+                    onChange={(e) =>
+                      setContent({
+                        ...content,
+                        spotlight: (content.spotlight || []).map((x) =>
+                          x.id === item.id ? { ...x, latitude: e.target.value } : x,
+                        ),
+                      })
+                    }
+                  />
+                  <input
+                    placeholder="Longitude"
+                    value={item.longitude || ''}
+                    onChange={(e) =>
+                      setContent({
+                        ...content,
+                        spotlight: (content.spotlight || []).map((x) =>
+                          x.id === item.id ? { ...x, longitude: e.target.value } : x,
                         ),
                       })
                     }
