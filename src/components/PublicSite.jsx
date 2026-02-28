@@ -1,12 +1,17 @@
 import { useRef } from 'react'
 import { Link } from 'react-router-dom'
 import SiteHeader from './SiteHeader'
+import usePageSeo from '../hooks/usePageSeo'
 
 const getPrimaryImage = (property) =>
   property.images?.[0] || property.image || ''
 
 function PublicSite({ content }) {
   const stripRef = useRef(null)
+  usePageSeo({
+    title: `${content.brand} | Buy Properties & Land In Uttarakhand`,
+    description: content.hero.description,
+  })
 
   const scrollStrip = (direction) => {
     if (!stripRef.current) return

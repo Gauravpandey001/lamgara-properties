@@ -1,10 +1,16 @@
 import { Link } from 'react-router-dom'
 import SiteHeader from './SiteHeader'
+import usePageSeo from '../hooks/usePageSeo'
 
 const toBlogSnippet = (text = '') => (text.length > 160 ? `${text.slice(0, 157).trim()}...` : text)
 const getPrimaryImage = (blog) => blog.images?.[0] || blog.image || ''
 
 function BlogPage({ content }) {
+  usePageSeo({
+    title: `Blog | ${content.brand}`,
+    description:
+      'Read property market updates, buying guides, and local insights for land and homes in Uttarakhand.',
+  })
   const blogs = (content.blogs || []).slice().sort((a, b) => (a.date < b.date ? 1 : -1))
 
   return (

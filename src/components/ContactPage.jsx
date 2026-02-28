@@ -1,6 +1,13 @@
 import SiteHeader from './SiteHeader'
+import usePageSeo from '../hooks/usePageSeo'
 
 function ContactPage({ content }) {
+  usePageSeo({
+    title: `Contact | ${content.brand}`,
+    description:
+      'Contact Lamgara Properties for property inquiries, site visits, and buying assistance in Uttarakhand.',
+  })
+
   return (
     <div className="shell">
       <SiteHeader content={content} />

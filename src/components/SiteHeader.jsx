@@ -1,4 +1,4 @@
-import { Link, NavLink } from 'react-router-dom'
+import { NavLink } from 'react-router-dom'
 
 const navLinks = [
   { label: 'Home', to: '/' },
@@ -30,9 +30,6 @@ function SiteHeader({ content }) {
             </NavLink>
           ))}
         </nav>
-        <Link to="/admin" className="button outline">
-          Admin
-        </Link>
       </div>
     </header>
   )

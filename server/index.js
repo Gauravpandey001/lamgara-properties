@@ -1,5 +1,6 @@
 import express from 'express'
 import path from 'node:path'
+import crypto from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import cors from 'cors'
 import dotenv from 'dotenv'
@@ -14,6 +15,11 @@ const port = Number(process.env.PORT || 4000)
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const staticRoot = path.resolve(__dirname, '../dist')
+const adminUsername = (process.env.ADMIN_USERNAME || '').trim()
+const adminPassword = process.env.ADMIN_PASSWORD || ''
+const adminPasswordHash = (process.env.ADMIN_PASSWORD_HASH || '').trim().toLowerCase()
+const authSecret = process.env.ADMIN_JWT_SECRET || ''
+const authTokenTtlSeconds = Number(process.env.ADMIN_TOKEN_TTL_SECONDS || 60 * 60 * 12)
 
 const requiredEnv = [
   'AWS_REGION',
@@ -37,6 +43,86 @@ const db = await initDb()
 app.use(cors())
 app.use(express.json({ limit: '5mb' }))
 
+const secureEqual = (a, b) => {
+  const aBuffer = Buffer.from(a)
+  const bBuffer = Buffer.from(b)
+  if (aBuffer.length !== bBuffer.length) return false
+  return crypto.timingSafeEqual(aBuffer, bBuffer)
+}
+
+const sha256 = (value) => crypto.createHash('sha256').update(value).digest('hex')
+
+const normalizeHash = (value) => value.replace(/^sha256[:$]/, '').trim()
+
+const isAuthConfigured = Boolean(adminUsername && authSecret && (adminPassword || adminPasswordHash))
+
+const isValidPassword = (inputPassword) => {
+  if (adminPasswordHash) {
+    return secureEqual(sha256(inputPassword), normalizeHash(adminPasswordHash))
+  }
+
+  return secureEqual(inputPassword, adminPassword)
+}
+
+const signToken = (payload) => {
+  const headerEncoded = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url')
+  const payloadEncoded = Buffer.from(JSON.stringify(payload)).toString('base64url')
+  const signature = crypto
+    .createHmac('sha256', authSecret)
+    .update(`${headerEncoded}.${payloadEncoded}`)
+    .digest('base64url')
+  return `${headerEncoded}.${payloadEncoded}.${signature}`
+}
+
+const verifyToken = (token) => {
+  const parts = token.split('.')
+  if (parts.length !== 3) return null
+
+  const [header, payload, signature] = parts
+  const expected = crypto
+    .createHmac('sha256', authSecret)
+    .update(`${header}.${payload}`)
+    .digest('base64url')
+
+  if (!secureEqual(signature, expected)) return null
+
+  try {
+    const parsed = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'))
+    if (typeof parsed.exp !== 'number' || parsed.exp < Math.floor(Date.now() / 1000)) return null
+    return parsed
+  } catch {
+    return null
+  }
+}
+
+const getBearerToken = (req) => {
+  const header = req.headers.authorization || ''
+  if (!header.startsWith('Bearer ')) return ''
+  return header.slice(7).trim()
+}
+
+const requireAdmin = (req, res, next) => {
+  if (!isAuthConfigured) {
+    res.status(503).json({ error: 'Admin authentication is not configured on server.' })
+    return
+  }
+
+  const token = getBearerToken(req)
+  if (!token) {
+    res.status(401).json({ error: 'Unauthorized' })
+    return
+  }
+
+  const payload = verifyToken(token)
+  if (!payload) {
+    res.status(401).json({ error: 'Unauthorized' })
+    return
+  }
+
+  req.admin = { username: payload.sub }
+  next()
+}
+
 app.get('/api/health', (_req, res) => {
   if (missingEnv.length) {
     res.status(500).json({ ok: false, missingEnv })
@@ -55,7 +141,36 @@ app.get('/api/content', async (_req, res) => {
   }
 })
 
-app.put('/api/content', async (req, res) => {
+app.post('/api/auth/login', (req, res) => {
+  if (!isAuthConfigured) {
+    res.status(503).json({ error: 'Admin authentication is not configured on server.' })
+    return
+  }
+
+  const { username, password } = req.body || {}
+  if (!username || !password) {
+    res.status(400).json({ error: 'username and password are required' })
+    return
+  }
+
+  const userOk = secureEqual(String(username).trim(), adminUsername)
+  const passwordOk = isValidPassword(String(password))
+  if (!userOk || !passwordOk) {
+    res.status(401).json({ error: 'Invalid credentials' })
+    return
+  }
+
+  const issuedAt = Math.floor(Date.now() / 1000)
+  const expiresAt = issuedAt + authTokenTtlSeconds
+  const token = signToken({ sub: adminUsername, iat: issuedAt, exp: expiresAt })
+  res.json({ ok: true, token, expiresAt })
+})
+
+app.get('/api/auth/me', requireAdmin, (req, res) => {
+  res.json({ ok: true, user: { username: req.admin.username } })
+})
+
+app.put('/api/content', requireAdmin, async (req, res) => {
   const content = req.body?.content
 
   if (!content || typeof content !== 'object') {
@@ -80,7 +195,7 @@ const safeName = (value) =>
 
 const allowedFolders = new Set(['hero', 'listings', 'spotlight', 'blogs'])
 
-app.post('/api/uploads/presign', async (req, res) => {
+app.post('/api/uploads/presign', requireAdmin, async (req, res) => {
   if (missingEnv.length) {
     res.status(500).json({ error: 'Missing required server env vars', missingEnv })
     return

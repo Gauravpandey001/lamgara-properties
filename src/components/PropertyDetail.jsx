@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
+import usePageSeo from '../hooks/usePageSeo'
 
 const getYoutubeEmbedSrc = (iframeCode = '') => {
   const srcMatch = iframeCode.match(/src=["']([^"']+)["']/i)
@@ -19,6 +20,15 @@ function PropertyDetail({ content }) {
 
   const source = type === 'spotlight' ? content.spotlight : content.listings
   const item = source.find((entry) => entry.id === id)
+  const seoTitle = item ? `${item.title} | ${content.brand}` : `Property Not Found | ${content.brand}`
+  const seoDescription =
+    item?.description ||
+    `${item?.location || 'Uttarakhand'} ${item?.category || 'property'} listing with pricing and details.`
+
+  usePageSeo({
+    title: seoTitle,
+    description: seoDescription,
+  })
 
   if (!item) {
     return (

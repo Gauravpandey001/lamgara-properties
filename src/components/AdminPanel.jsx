@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { defaultContent } from '../data/defaultContent'
+import usePageSeo from '../hooks/usePageSeo'
 
 const emptyListing = {
   title: '',
@@ -55,7 +56,13 @@ const moveImage = (images, fromIndex, direction) => {
   return next
 }
 
-function AdminPanel({ content, setContent, saveContent, saveState }) {
+function AdminPanel({ content, setContent, saveContent, saveState, authToken, onLogout }) {
+  usePageSeo({
+    title: `Admin Panel | ${content.brand}`,
+    description: 'Manage listings, spotlight properties, and blog posts.',
+    robots: 'noindex,nofollow',
+  })
+
   const [newListing, setNewListing] = useState(emptyListing)
   const [newSpotlight, setNewSpotlight] = useState(emptySpotlight)
   const [newBlog, setNewBlog] = useState(emptyBlog)
@@ -66,7 +73,10 @@ function AdminPanel({ content, setContent, saveContent, saveState }) {
   const uploadImageToS3 = async (file, folder) => {
     const presign = await fetch(presignEndpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${authToken}`,
+      },
       body: JSON.stringify({
         filename: file.name,
         contentType: file.type || '',
@@ -75,6 +85,7 @@ function AdminPanel({ content, setContent, saveContent, saveState }) {
     })
 
     if (!presign.ok) {
+      if (presign.status === 401) throw new Error('Session expired. Please login again.')
       throw new Error('Could not generate upload URL')
     }
 
@@ -172,6 +183,9 @@ function AdminPanel({ content, setContent, saveContent, saveState }) {
           onClick={() => setContent(defaultContent)}
         >
           Reset Demo
+        </button>
+        <button type="button" className="button ghost" onClick={onLogout}>
+          Logout
         </button>
         {saveState ? <p className="note">{saveState}</p> : null}
         {uploadState.message ? <p className="note">{uploadState.message}</p> : null}

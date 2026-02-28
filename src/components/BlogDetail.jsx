@@ -1,5 +1,6 @@
 import { Link, useParams } from 'react-router-dom'
 import SiteHeader from './SiteHeader'
+import usePageSeo from '../hooks/usePageSeo'
 
 const getImages = (blog) => {
   if (Array.isArray(blog.images) && blog.images.length) return blog.images
@@ -10,6 +11,14 @@ const getImages = (blog) => {
 function BlogDetail({ content }) {
   const { id } = useParams()
   const blog = (content.blogs || []).find((entry) => entry.id === id)
+  const seoTitle = blog ? `${blog.title} | ${content.brand} Blog` : `Blog Not Found | ${content.brand}`
+  const seoDescription =
+    blog?.excerpt || blog?.content?.slice(0, 160) || 'Read the latest blog updates from Lamgara Properties.'
+
+  usePageSeo({
+    title: seoTitle,
+    description: seoDescription,
+  })
 
   if (!blog) {
     return (

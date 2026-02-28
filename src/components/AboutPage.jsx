@@ -1,6 +1,13 @@
 import SiteHeader from './SiteHeader'
+import usePageSeo from '../hooks/usePageSeo'
 
 function AboutPage({ content }) {
+  usePageSeo({
+    title: `About | ${content.brand}`,
+    description:
+      'Learn about Lamgara Properties, our local expertise, and how we help with land and property buying in Uttarakhand.',
+  })
+
   return (
     <div className="shell">
       <SiteHeader content={content} />
