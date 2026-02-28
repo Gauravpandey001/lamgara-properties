@@ -1,6 +1,5 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { defaultContent } from '../data/defaultContent'
 import usePageSeo from '../hooks/usePageSeo'
 
 const emptyListing = {
@@ -176,13 +175,6 @@ function AdminPanel({ content, setContent, saveContent, saveState, authToken, on
         </Link>
         <button type="button" className="button" onClick={() => saveContent()}>
           Save All Changes
-        </button>
-        <button
-          type="button"
-          className="button ghost"
-          onClick={() => setContent(defaultContent)}
-        >
-          Reset Demo
         </button>
         <button type="button" className="button ghost" onClick={onLogout}>
           Logout
