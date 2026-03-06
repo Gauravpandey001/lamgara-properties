@@ -27,6 +27,29 @@ export const initDb = async () => {
     )
   `)
 
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS inquiries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      phone TEXT NOT NULL,
+      email TEXT NOT NULL,
+      message TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )
+  `)
+
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS location_cache (
+      query_key TEXT PRIMARY KEY,
+      query_text TEXT NOT NULL,
+      lat REAL,
+      lon REAL,
+      display_name TEXT,
+      found INTEGER NOT NULL,
+      updated_at TEXT NOT NULL
+    )
+  `)
+
   const row = await db.get('SELECT id FROM site_content WHERE id = 1')
 
   if (!row) {
@@ -62,4 +85,51 @@ export const saveContent = async (db, content) => {
   )
 
   return { updatedAt }
+}
+
+export const saveInquiry = async (db, inquiry) => {
+  const createdAt = new Date().toISOString()
+  const { name, phone, email, message } = inquiry
+
+  const result = await db.run(
+    'INSERT INTO inquiries (name, phone, email, message, created_at) VALUES (?, ?, ?, ?, ?)',
+    name,
+    phone,
+    email,
+    message,
+    createdAt,
+  )
+
+  return { id: result.lastID, createdAt }
+}
+
+export const getCachedLocation = async (db, queryKey) =>
+  db.get(
+    'SELECT query_text, lat, lon, display_name, found, updated_at FROM location_cache WHERE query_key = ?',
+    queryKey,
+  )
+
+export const upsertCachedLocation = async (db, queryKey, payload) => {
+  const updatedAt = new Date().toISOString()
+  const { queryText, lat, lon, displayName, found } = payload
+  await db.run(
+    `
+      INSERT INTO location_cache (query_key, query_text, lat, lon, display_name, found, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(query_key) DO UPDATE SET
+        query_text = excluded.query_text,
+        lat = excluded.lat,
+        lon = excluded.lon,
+        display_name = excluded.display_name,
+        found = excluded.found,
+        updated_at = excluded.updated_at
+    `,
+    queryKey,
+    queryText,
+    lat ?? null,
+    lon ?? null,
+    displayName ?? null,
+    found ? 1 : 0,
+    updatedAt,
+  )
 }

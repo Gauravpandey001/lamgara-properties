@@ -14,10 +14,14 @@ function MarketingHeader({ brand }) {
         <button
           type="button"
           className="lp-nav-toggle"
-          aria-label="Toggle navigation"
+          aria-label={menuOpen ? 'Close navigation' : 'Open navigation'}
           onClick={() => setMenuOpen((prev) => !prev)}
         >
-          {menuOpen ? 'Close' : 'Menu'}
+          <span className={`lp-burger-icon ${menuOpen ? 'open' : ''}`} aria-hidden="true">
+            <span />
+            <span />
+            <span />
+          </span>
         </button>
 
         <nav className={`lp-nav-links ${menuOpen ? 'open' : ''}`} aria-label="Main">

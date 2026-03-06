@@ -16,6 +16,41 @@ const authLoginEndpoint = apiBase ? `${apiBase}/api/auth/login` : '/api/auth/log
 const authMeEndpoint = apiBase ? `${apiBase}/api/auth/me` : '/api/auth/me'
 const adminTokenKey = 'lamgara_admin_token'
 
+const normalizeListings = (listings = [], legacySpotlight = []) => {
+  const mainListings = (Array.isArray(listings) ? listings : []).map((item) => ({
+    ...item,
+    spotlight: Boolean(item.spotlight || item.featured),
+  }))
+
+  const spotlightAsListings = (Array.isArray(legacySpotlight) ? legacySpotlight : []).map((item, index) => ({
+    ...item,
+    id: item.id ? `spot-${item.id}` : `spot-${Date.now()}-${index}`,
+    category: item.category || 'Land for Sale',
+    size: item.size || '',
+    spotlight: true,
+  }))
+
+  const merged = [...mainListings]
+  const existingIds = new Set(mainListings.map((item) => item.id))
+  spotlightAsListings.forEach((item) => {
+    if (!existingIds.has(item.id)) {
+      merged.push(item)
+      existingIds.add(item.id)
+    }
+  })
+
+  return merged
+}
+
+const normalizeContent = (rawContent) => {
+  const source = rawContent && typeof rawContent === 'object' ? rawContent : {}
+  const { spotlight: legacySpotlight, ...rest } = source
+  return {
+    ...rest,
+    listings: normalizeListings(source.listings, legacySpotlight),
+  }
+}
+
 function App() {
   const [content, setContent] = useState(defaultContent)
   const [loading, setLoading] = useState(true)
@@ -32,7 +67,7 @@ function App() {
 
         const payload = await response.json()
         if (payload?.content) {
-          setContent(payload.content)
+          setContent(normalizeContent(payload.content))
         }
       } catch {
         setSaveState('Could not load server content. Using defaults.')
@@ -103,7 +138,7 @@ function App() {
       return false
     }
 
-    const payloadContent = contentOverride || content
+    const payloadContent = normalizeContent(contentOverride || content)
     setSaveState('Saving...')
 
     try {

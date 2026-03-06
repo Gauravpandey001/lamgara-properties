@@ -1,36 +1,16 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import usePageSeo from '../hooks/usePageSeo'
 
 const getPrimaryImage = (property) => property.images?.[0] || property.image || ''
 const apiBase = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')
-const geocodeEndpoint = apiBase ? `${apiBase}/api/geocode` : '/api/geocode'
-
-const toNumberOrNull = (value) => {
-  const num = Number(value)
-  return Number.isFinite(num) ? num : null
-}
+const propertySearchEndpoint = apiBase ? `${apiBase}/api/search/properties` : '/api/search/properties'
 
 const toSafeText = (value) => (typeof value === 'string' ? value : String(value ?? ''))
-
-const getCoordinates = (property) => {
-  const lat = toNumberOrNull(property.latitude ?? property.lat)
-  const lon = toNumberOrNull(property.longitude ?? property.lng ?? property.lon)
-  return lat !== null && lon !== null ? { lat, lon } : null
-}
-
-const haversineKm = (aLat, aLon, bLat, bLon) => {
-  const toRad = (deg) => (deg * Math.PI) / 180
-  const dLat = toRad(bLat - aLat)
-  const dLon = toRad(bLon - aLon)
-  const lat1 = toRad(aLat)
-  const lat2 = toRad(bLat)
-
-  const h =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2
-
-  return 6371 * 2 * Math.asin(Math.sqrt(h))
+const sortModes = ['nearest', 'farthest']
+const sortModeLabel = {
+  nearest: 'Nearest',
+  farthest: 'Farthest',
 }
 
 function PublicSite({ content }) {
@@ -38,9 +18,13 @@ function PublicSite({ content }) {
   const [localityInput, setLocalityInput] = useState('')
   const [localityFilter, setLocalityFilter] = useState('')
   const [categoryFilter, setCategoryFilter] = useState('All')
+  const [sortBy, setSortBy] = useState('nearest')
   const [searchState, setSearchState] = useState({ loading: false, error: '', result: null })
-  const topListings = useMemo(() => (content.listings || []).slice(0, 6), [content.listings])
-  const topSpotlight = useMemo(() => (content.spotlight || []).slice(0, 4), [content.spotlight])
+  const spotlightListings = useMemo(
+    () => (content.listings || []).filter((item) => Boolean(item.spotlight)),
+    [content.listings],
+  )
+  const topSpotlight = useMemo(() => spotlightListings.slice(0, 4), [spotlightListings])
   const categories = useMemo(
     () => (content.propertyTypes || []).filter((type) => type !== 'All').slice(0, 4),
     [content.propertyTypes],
@@ -52,75 +36,102 @@ function PublicSite({ content }) {
     const fromTypes = (content.propertyTypes || []).filter((item) => item && item !== 'All')
     return ['All', ...Array.from(new Set([...fromTypes, ...listingCategories]))]
   }, [content.listings, content.propertyTypes])
-  const filteredListings = useMemo(() => {
-    const categoryMatched = topListings.filter((property) =>
-      categoryFilter === 'All' ? true : toSafeText(property.category) === categoryFilter,
-    )
 
-    if (!localityFilter) return categoryMatched
+  const categoryMatchedListings = useMemo(
+    () =>
+      (content.listings || []).filter((property) =>
+        categoryFilter === 'All' ? true : toSafeText(property.category) === categoryFilter,
+      ),
+    [content.listings, categoryFilter],
+  )
 
-    const query = localityFilter.toLowerCase()
-    const exact = []
-    const others = []
+  const displayedListings = useMemo(() => {
+    if (!localityFilter) return categoryMatchedListings
+    const fromSearch = searchState.result?.results
+    if (Array.isArray(fromSearch)) return fromSearch
+    return []
+  }, [localityFilter, categoryMatchedListings, searchState.result])
+  const hasActiveSearch = Boolean(localityFilter)
 
-    categoryMatched.forEach((property) => {
-      const matches = toSafeText(property.location).toLowerCase().includes(query)
-      if (matches) {
-        exact.push({ ...property, distanceKm: 0, exactLocalityMatch: true })
-        return
-      }
+  const nearestProperty = searchState.result?.nearestProperty || null
 
-      const coords = searchState.result ? getCoordinates(property) : null
-      if (coords && searchState.result) {
-        others.push({
-          ...property,
-          distanceKm: haversineKm(searchState.result.lat, searchState.result.lon, coords.lat, coords.lon),
-          exactLocalityMatch: false,
-        })
-      } else {
-        others.push({ ...property, distanceKm: null, exactLocalityMatch: false })
-      }
-    })
-
-    others.sort((a, b) => {
-      if (a.distanceKm === null && b.distanceKm === null) return 0
-      if (a.distanceKm === null) return 1
-      if (b.distanceKm === null) return -1
-      return a.distanceKm - b.distanceKm
-    })
-
-    return [...exact, ...others]
-  }, [topListings, localityFilter, categoryFilter, searchState.result])
-
-  const applyLocationSearch = async () => {
-    const query = localityInput.trim()
-    setLocalityFilter(query)
+  const runLocationSearch = useCallback(async (query, category) => {
+    const trimmed = query.trim()
+    setLocalityFilter(trimmed)
     setSearchState({ loading: false, error: '', result: null })
-    if (!query) return
+    if (!trimmed) return
 
     try {
       setSearchState({ loading: true, error: '', result: null })
-      const response = await fetch(`${geocodeEndpoint}?q=${encodeURIComponent(query)}`)
-      if (!response.ok) throw new Error('Could not resolve location')
-      const payload = await response.json()
-      if (payload?.found && Number.isFinite(payload.lat) && Number.isFinite(payload.lon)) {
-        setSearchState({
-          loading: false,
-          error: '',
-          result: { lat: payload.lat, lon: payload.lon, displayName: payload.displayName || query },
-        })
-        return
+      const url = new URL(propertySearchEndpoint, window.location.origin)
+      url.searchParams.set('q', trimmed)
+      url.searchParams.set('category', category)
+      const response = await fetch(url.toString())
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        throw new Error(payload?.error || 'Could not search by location')
       }
 
-      setSearchState({ loading: false, error: 'Location not found. Showing exact locality matches only.', result: null })
-    } catch {
-      setSearchState({ loading: false, error: 'Distance lookup unavailable right now.', result: null })
+      setSearchState({ loading: false, error: '', result: payload })
+    } catch (error) {
+      setSearchState({
+        loading: false,
+        error: error instanceof Error ? error.message : 'Location search unavailable right now.',
+        result: null,
+      })
     }
+  }, [])
+
+  const applyLocationSearch = async () => {
+    setSortBy('nearest')
+    await runLocationSearch(localityInput, categoryFilter)
+  }
+
+  useEffect(() => {
+    if (!localityFilter) return
+    runLocationSearch(localityFilter, categoryFilter)
+  }, [categoryFilter, localityFilter, runLocationSearch])
+
+  const featuredListings = useMemo(
+    () =>
+      displayedListings.filter((property) =>
+        categoryFilter === 'All' ? true : toSafeText(property.category) === categoryFilter,
+      ),
+    [displayedListings, categoryFilter],
+  )
+
+  const topFeaturedListings = useMemo(() => featuredListings.slice(0, 12), [featuredListings])
+  const sortedSearchResults = useMemo(() => {
+    const list = [...featuredListings]
+    list.sort((a, b) => {
+      const aDistance = Number.isFinite(a.distanceKm) ? a.distanceKm : Number.POSITIVE_INFINITY
+      const bDistance = Number.isFinite(b.distanceKm) ? b.distanceKm : Number.POSITIVE_INFINITY
+
+      if (sortBy === 'nearest') {
+        if (a.exactLocalityMatch && !b.exactLocalityMatch) return -1
+        if (!a.exactLocalityMatch && b.exactLocalityMatch) return 1
+        if (aDistance !== bDistance) return aDistance - bDistance
+        return toSafeText(a.title).localeCompare(toSafeText(b.title))
+      }
+      if (a.exactLocalityMatch && !b.exactLocalityMatch) return -1
+      if (!a.exactLocalityMatch && b.exactLocalityMatch) return 1
+      if (aDistance !== bDistance) return bDistance - aDistance
+      return toSafeText(a.title).localeCompare(toSafeText(b.title))
+    })
+    return list
+  }, [featuredListings, sortBy])
+  const toggleSortMode = () =>
+    setSortBy((prev) => sortModes[(sortModes.indexOf(prev) + 1) % sortModes.length])
+  const clearSearchView = () => {
+    setLocalityFilter('')
+    setLocalityInput('')
+    setSearchState({ loading: false, error: '', result: null })
+    setSortBy('nearest')
   }
 
   const stats = [
     { label: 'Properties Listed', value: `${content.listings?.length || 0}+` },
-    { label: 'Spotlight Picks', value: `${content.spotlight?.length || 0}+` },
+    { label: 'Spotlight Picks', value: `${spotlightListings.length || 0}+` },
     { label: 'Blog Articles', value: `${content.blogs?.length || 0}+` },
     { label: 'Service Areas', value: '15+' },
   ]
@@ -141,10 +152,14 @@ function PublicSite({ content }) {
           <button
             type="button"
             className="lp-nav-toggle"
-            aria-label="Toggle navigation"
+            aria-label={menuOpen ? 'Close navigation' : 'Open navigation'}
             onClick={() => setMenuOpen((prev) => !prev)}
           >
-            {menuOpen ? 'Close' : 'Menu'}
+            <span className={`lp-burger-icon ${menuOpen ? 'open' : ''}`} aria-hidden="true">
+              <span />
+              <span />
+              <span />
+            </span>
           </button>
 
           <nav className={`lp-nav-links ${menuOpen ? 'open' : ''}`} aria-label="Main">
@@ -171,6 +186,125 @@ function PublicSite({ content }) {
       </header>
 
       <main className="lp-main">
+        {hasActiveSearch ? (
+          <section className="lp-page-main lp-search-page">
+            <div className="lp-search-topbar">
+              <button type="button" className="button outline" onClick={clearSearchView}>
+                Back
+              </button>
+              <Link to="/" className="lp-search-brand" onClick={clearSearchView}>
+                {content.brand}
+              </Link>
+            </div>
+
+            <div className="lp-search-surface">
+              <div className="lp-search-controls">
+                <input
+                  type="text"
+                  placeholder="Search locality (e.g. Tehri, Chamba)"
+                  value={localityInput}
+                  onChange={(event) => setLocalityInput(event.target.value)}
+                />
+                <button type="button" className="button lp-search-btn" onClick={applyLocationSearch}>
+                  {searchState.loading ? 'Searching...' : 'Search'}
+                </button>
+                <button type="button" className="button outline lp-sort-btn" onClick={toggleSortMode}>
+                  Sort By: {sortModeLabel[sortBy]}
+                </button>
+              </div>
+
+              <div className="lp-search-meta">
+                {searchState.loading ? (
+                  <p className="lp-search-note">Finding closest properties...</p>
+                ) : (
+                  <p className="lp-search-note">
+                    Results for <strong>{localityFilter}</strong>
+                    {searchState.result?.resolvedLocation?.displayName
+                      ? ` (${searchState.result.resolvedLocation.displayName})`
+                      : ''}
+                  </p>
+                )}
+                {nearestProperty && !searchState.loading ? (
+                  <p className="lp-search-note">
+                    Nearest property: {nearestProperty.title}
+                    {Number.isFinite(nearestProperty.distanceKm)
+                      ? ` (${nearestProperty.distanceKm.toFixed(1)} km)`
+                      : ''}
+                  </p>
+                ) : null}
+              </div>
+            </div>
+
+            {searchState.error ? <p className="lp-search-note">{searchState.error}</p> : null}
+            {searchState.loading ? (
+              <div className="lp-grid lp-loading-grid">
+                {Array.from({ length: 6 }).map((_, index) => (
+                  <article key={`skeleton-${index}`} className="lp-card lp-skeleton-card">
+                    <div className="lp-skeleton-block lp-skeleton-image" />
+                    <div className="lp-card-body">
+                      <div className="lp-skeleton-block lp-skeleton-line" />
+                      <div className="lp-skeleton-block lp-skeleton-line short" />
+                      <div className="lp-skeleton-block lp-skeleton-line" />
+                    </div>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <div className="lp-grid">
+                {sortedSearchResults.map((property, index) => (
+                  <Link
+                    key={property.id}
+                    to={`/property/listing/${property.id}`}
+                    className="lp-card lp-result-card"
+                    style={{ '--stagger': index }}
+                  >
+                    <div
+                      className={`lp-card-image tone-${(index % 4) + 1}`}
+                      style={
+                        getPrimaryImage(property)
+                          ? { backgroundImage: `url(${getPrimaryImage(property)})` }
+                          : undefined
+                      }
+                    >
+                      <span className="badge">{property.status}</span>
+                      {property.videoIframe ? <span className="video-pill">Video</span> : null}
+                    </div>
+                    <div className="lp-card-body">
+                      <h4>{property.title}</h4>
+                      <p>
+                        {property.location}
+                        {Number.isFinite(property.distanceKm) ? (
+                          <span className="lp-distance-pill">
+                            {property.distanceKm.toFixed(1)} km from {localityFilter}
+                          </span>
+                        ) : null}
+                        {property.exactLocalityMatch ? (
+                          <span className="lp-distance-pill">Exact locality match</span>
+                        ) : null}
+                      </p>
+                      {property.description ? <p className="card-desc">{property.description}</p> : null}
+                      <div className="tags">
+                        <span>{property.size}</span>
+                        <span>{property.category}</span>
+                      </div>
+                      <div className="card-row">
+                        <strong>{property.price}</strong>
+                        <span className="chip">
+                          {nearestProperty && nearestProperty.id === property.id ? 'Nearest' : 'Details'}
+                        </span>
+                      </div>
+                    </div>
+                  </Link>
+                ))}
+              </div>
+            )}
+
+            {!sortedSearchResults.length ? (
+              <p className="lp-empty-state">No properties found for this searched location.</p>
+            ) : null}
+          </section>
+        ) : (
+          <>
         <section
           id="buy"
           className="lp-hero"
@@ -232,6 +366,14 @@ function PublicSite({ content }) {
               </button>
             </div>
             {searchState.error ? <p className="lp-search-note">{searchState.error}</p> : null}
+            {localityFilter && !searchState.loading && nearestProperty ? (
+              <p className="lp-search-note">
+                Nearest property near {localityFilter}: {nearestProperty.title}
+                {Number.isFinite(nearestProperty.distanceKm)
+                  ? ` (${nearestProperty.distanceKm.toFixed(1)} km)`
+                  : ''}
+              </p>
+            ) : null}
           </div>
         </section>
 
@@ -252,7 +394,7 @@ function PublicSite({ content }) {
           </div>
           <div className="lp-strip">
             {topSpotlight.map((property, index) => (
-              <Link key={property.id} to={`/property/spotlight/${property.id}`} className="lp-card lp-strip-card">
+              <Link key={property.id} to={`/property/listing/${property.id}`} className="lp-card lp-strip-card">
                 <div
                   className={`lp-card-image tone-${(index % 4) + 1}`}
                   style={
@@ -265,18 +407,7 @@ function PublicSite({ content }) {
                 </div>
                 <div className="lp-card-body">
                   <h4>{property.title}</h4>
-                  <p>
-                    {property.location}
-                    {localityFilter && property.distanceKm !== null ? (
-                      <span className="lp-distance-pill">
-                        {property.exactLocalityMatch
-                          ? 'Exact locality match'
-                          : Number.isFinite(property.distanceKm)
-                            ? `${property.distanceKm.toFixed(1)} km from ${localityFilter}`
-                            : `Distance from ${localityFilter} unavailable`}
-                      </span>
-                    ) : null}
-                  </p>
+                  <p>{property.location}</p>
                   {property.description ? <p className="card-desc">{property.description}</p> : null}
                   <div className="card-row">
                     <strong>{property.price}</strong>
@@ -295,7 +426,7 @@ function PublicSite({ content }) {
           </div>
 
           <div className="lp-grid">
-            {filteredListings.map((property, index) => (
+            {topFeaturedListings.map((property, index) => (
               <Link key={property.id} to={`/property/listing/${property.id}`} className="lp-card">
                 <div
                   className={`lp-card-image tone-${(index % 4) + 1}`}
@@ -310,7 +441,17 @@ function PublicSite({ content }) {
                 </div>
                 <div className="lp-card-body">
                   <h4>{property.title}</h4>
-                  <p>{property.location}</p>
+                  <p>
+                    {property.location}
+                    {localityFilter && Number.isFinite(property.distanceKm) ? (
+                      <span className="lp-distance-pill">
+                        {property.distanceKm.toFixed(1)} km from {localityFilter}
+                      </span>
+                    ) : null}
+                    {localityFilter && property.exactLocalityMatch ? (
+                      <span className="lp-distance-pill">Exact locality match</span>
+                    ) : null}
+                  </p>
                   {property.description ? <p className="card-desc">{property.description}</p> : null}
                   <div className="tags">
                     <span>{property.size}</span>
@@ -318,13 +459,15 @@ function PublicSite({ content }) {
                   </div>
                   <div className="card-row">
                     <strong>{property.price}</strong>
-                    <span className="chip">Details</span>
+                    <span className="chip">
+                      {nearestProperty && nearestProperty.id === property.id ? 'Nearest' : 'Details'}
+                    </span>
                   </div>
                 </div>
               </Link>
             ))}
           </div>
-          {!filteredListings.length ? (
+          {!topFeaturedListings.length ? (
             <p className="lp-empty-state">
               No properties found for current locality/category filters.
             </p>
@@ -356,6 +499,8 @@ function PublicSite({ content }) {
             </Link>
           </div>
         </section>
+          </>
+        )}
       </main>
 
       <footer className="lp-footer">

@@ -1,12 +1,20 @@
 import express from 'express'
 import path from 'node:path'
+import fs from 'node:fs'
 import crypto from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import cors from 'cors'
 import dotenv from 'dotenv'
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
-import { getContent, initDb, saveContent } from './db.js'
+import {
+  getCachedLocation,
+  getContent,
+  initDb,
+  saveContent,
+  saveInquiry,
+  upsertCachedLocation,
+} from './db.js'
 
 dotenv.config()
 
@@ -15,11 +23,15 @@ const port = Number(process.env.PORT || 4000)
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const staticRoot = path.resolve(__dirname, '../dist')
+const hasBuiltFrontend =
+  fs.existsSync(path.join(staticRoot, 'index.html')) && fs.existsSync(path.join(staticRoot, 'assets'))
 const adminUsername = (process.env.ADMIN_USERNAME || '').trim()
 const adminPassword = process.env.ADMIN_PASSWORD || ''
 const adminPasswordHash = (process.env.ADMIN_PASSWORD_HASH || '').trim().toLowerCase()
 const authSecret = process.env.ADMIN_JWT_SECRET || ''
 const authTokenTtlSeconds = Number(process.env.ADMIN_TOKEN_TTL_SECONDS || 60 * 60 * 12)
+const sitemapPaths = ['/', '/properties', '/about', '/blog', '/contact']
+const nearbyRadiusKm = Number(process.env.SEARCH_NEARBY_RADIUS_KM || 60)
 
 const requiredEnv = [
   'AWS_REGION',
@@ -40,7 +52,42 @@ const s3 = new S3Client({
 
 const db = await initDb()
 
-app.use(cors())
+const parseOrigins = (raw) =>
+  (raw || '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+
+const isLocalhostOrigin = (origin) => {
+  try {
+    const parsed = new URL(origin)
+    return ['localhost', '127.0.0.1'].includes(parsed.hostname)
+  } catch {
+    return false
+  }
+}
+
+const configuredOrigins = parseOrigins(process.env.CORS_ORIGIN)
+const corsOrigin = (origin, callback) => {
+  if (!origin) {
+    callback(null, true)
+    return
+  }
+
+  if (configuredOrigins.length > 0) {
+    callback(null, configuredOrigins.includes(origin))
+    return
+  }
+
+  callback(null, isLocalhostOrigin(origin))
+}
+
+app.use(
+  cors({
+    origin: corsOrigin,
+    methods: ['GET', 'POST', 'PUT', 'OPTIONS'],
+  }),
+)
 app.use(express.json({ limit: '5mb' }))
 
 const secureEqual = (a, b) => {
@@ -195,6 +242,161 @@ const safeName = (value) =>
 
 const allowedFolders = new Set(['hero', 'listings', 'spotlight', 'blogs'])
 
+const toNumberOrNull = (value) => {
+  const num = Number(value)
+  return Number.isFinite(num) ? num : null
+}
+
+const toSafeText = (value) => (typeof value === 'string' ? value : String(value ?? ''))
+
+const haversineKm = (aLat, aLon, bLat, bLon) => {
+  const toRad = (deg) => (deg * Math.PI) / 180
+  const dLat = toRad(bLat - aLat)
+  const dLon = toRad(bLon - aLon)
+  const lat1 = toRad(aLat)
+  const lat2 = toRad(bLat)
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2
+  return 6371 * 2 * Math.asin(Math.sqrt(h))
+}
+
+const normalizeLocationKey = (value) => value.toLowerCase().trim().replace(/\s+/g, ' ')
+
+const geocodeLocation = async (query) => {
+  const normalized = normalizeLocationKey(query)
+  if (!normalized) return { found: false }
+
+  const cached = await getCachedLocation(db, normalized)
+  if (cached) {
+    return {
+      found: Boolean(cached.found),
+      lat: toNumberOrNull(cached.lat),
+      lon: toNumberOrNull(cached.lon),
+      displayName: cached.display_name || query,
+      source: 'cache',
+    }
+  }
+
+  const email = process.env.NOMINATIM_EMAIL ? `&email=${encodeURIComponent(process.env.NOMINATIM_EMAIL)}` : ''
+  const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(query)}${email}`
+
+  const response = await fetch(url, {
+    headers: {
+      'User-Agent': 'lamgara-properties/1.0',
+    },
+  })
+
+  if (!response.ok) {
+    throw new Error('Geocoding provider error')
+  }
+
+  const data = await response.json()
+  if (!Array.isArray(data) || !data[0]) {
+    await upsertCachedLocation(db, normalized, {
+      queryText: query,
+      lat: null,
+      lon: null,
+      displayName: query,
+      found: false,
+    })
+    return { found: false, source: 'provider' }
+  }
+
+  const first = data[0]
+  const lat = toNumberOrNull(first.lat)
+  const lon = toNumberOrNull(first.lon)
+  const displayName = first.display_name || query
+  await upsertCachedLocation(db, normalized, {
+    queryText: query,
+    lat,
+    lon,
+    displayName,
+    found: lat !== null && lon !== null,
+  })
+
+  return { found: lat !== null && lon !== null, lat, lon, displayName, source: 'provider' }
+}
+
+const listingCoordinates = async (listing) => {
+  const lat = toNumberOrNull(listing.latitude ?? listing.lat)
+  const lon = toNumberOrNull(listing.longitude ?? listing.lng ?? listing.lon)
+  if (lat !== null && lon !== null) return { lat, lon, source: 'listing' }
+
+  const locationQuery = toSafeText(listing.location).trim()
+  if (!locationQuery) return null
+
+  try {
+    const resolved = await geocodeLocation(locationQuery)
+    if (!resolved.found) return null
+    return { lat: resolved.lat, lon: resolved.lon, source: resolved.source }
+  } catch {
+    return null
+  }
+}
+
+const sanitizeHost = (value) => String(value || '').replace(/[^a-z0-9.:_-]/gi, '')
+
+const getPublicBaseUrl = (req) => {
+  const fromEnv = (process.env.PUBLIC_BASE_URL || '').trim().replace(/\/$/, '')
+  if (fromEnv) return fromEnv
+  const host = sanitizeHost(req.get('host'))
+  return `${req.protocol}://${host}`
+}
+
+app.get('/robots.txt', (req, res) => {
+  const base = getPublicBaseUrl(req)
+  res.type('text/plain').send(`User-agent: *\nAllow: /\nDisallow: /admin\n\nSitemap: ${base}/sitemap.xml\n`)
+})
+
+app.get('/sitemap.xml', (req, res) => {
+  const base = getPublicBaseUrl(req)
+  const urls = sitemapPaths
+    .map((route) => {
+      const loc = route === '/' ? base : `${base}${route}`
+      return [
+        '  <url>',
+        `    <loc>${loc}</loc>`,
+        `    <changefreq>${route === '/blog' ? 'weekly' : route === '/' ? 'daily' : 'monthly'}</changefreq>`,
+        `    <priority>${route === '/' ? '1.0' : route === '/properties' ? '0.9' : '0.7'}</priority>`,
+        '  </url>',
+      ].join('\n')
+    })
+    .join('\n')
+
+  const xml = ['<?xml version="1.0" encoding="UTF-8"?>', '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">', urls, '</urlset>'].join('\n')
+  res.type('application/xml').send(xml)
+})
+
+app.post('/api/inquiries', async (req, res) => {
+  const name = String(req.body?.name || '').trim()
+  const phone = String(req.body?.phone || '').trim()
+  const email = String(req.body?.email || '').trim()
+  const message = String(req.body?.message || '').trim()
+
+  if (!name || !phone || !email || !message) {
+    res.status(400).json({ error: 'name, phone, email and message are required' })
+    return
+  }
+
+  if (name.length > 120 || phone.length > 40 || email.length > 160 || message.length > 4000) {
+    res.status(400).json({ error: 'One or more fields exceed allowed length' })
+    return
+  }
+
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    res.status(400).json({ error: 'Invalid email format' })
+    return
+  }
+
+  try {
+    const result = await saveInquiry(db, { name, phone, email, message })
+    res.status(201).json({ ok: true, inquiryId: result.id, createdAt: result.createdAt })
+  } catch {
+    res.status(500).json({ error: 'Failed to save inquiry' })
+  }
+})
+
 app.get('/api/geocode', async (req, res) => {
   const query = String(req.query.q || '').trim()
   if (!query) {
@@ -202,36 +404,99 @@ app.get('/api/geocode', async (req, res) => {
     return
   }
 
-  const email = process.env.NOMINATIM_EMAIL ? `&email=${encodeURIComponent(process.env.NOMINATIM_EMAIL)}` : ''
-  const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(query)}${email}`
-
   try {
-    const response = await fetch(url, {
-      headers: {
-        'User-Agent': 'lamgara-properties/1.0',
-      },
-    })
-
-    if (!response.ok) {
-      res.status(502).json({ error: 'Geocoding provider error' })
-      return
-    }
-
-    const data = await response.json()
-    if (!Array.isArray(data) || !data[0]) {
+    const resolved = await geocodeLocation(query)
+    if (!resolved.found) {
       res.json({ found: false })
       return
     }
 
-    const first = data[0]
     res.json({
       found: true,
-      lat: Number(first.lat),
-      lon: Number(first.lon),
-      displayName: first.display_name || query,
+      lat: resolved.lat,
+      lon: resolved.lon,
+      displayName: resolved.displayName || query,
     })
   } catch {
-    res.status(500).json({ error: 'Geocoding failed' })
+    res.status(502).json({ error: 'Geocoding provider error' })
+  }
+})
+
+app.get('/api/search/properties', async (req, res) => {
+  const query = String(req.query.q || '').trim()
+  if (!query) {
+    res.status(400).json({ error: 'q query is required' })
+    return
+  }
+
+  const category = String(req.query.category || 'All').trim()
+
+  try {
+    const payload = await getContent(db)
+    const listings = Array.isArray(payload.content?.listings) ? payload.content.listings : []
+    const filtered = listings.filter((item) =>
+      category === 'All' ? true : toSafeText(item.category) === category,
+    )
+
+    const exactTerm = query.toLowerCase()
+    const resolved = await geocodeLocation(query)
+    const ranked = []
+
+    for (const listing of filtered) {
+      const exactLocalityMatch = toSafeText(listing.location).toLowerCase().includes(exactTerm)
+      let distanceKm = null
+
+      if (resolved.found) {
+        const coords = await listingCoordinates(listing)
+        if (coords) {
+          distanceKm = haversineKm(resolved.lat, resolved.lon, coords.lat, coords.lon)
+        }
+      }
+
+      ranked.push({
+        ...listing,
+        exactLocalityMatch,
+        distanceKm,
+      })
+    }
+
+    ranked.sort((a, b) => {
+      if (a.exactLocalityMatch && !b.exactLocalityMatch) return -1
+      if (!a.exactLocalityMatch && b.exactLocalityMatch) return 1
+
+      const aHasDistance = Number.isFinite(a.distanceKm)
+      const bHasDistance = Number.isFinite(b.distanceKm)
+      if (aHasDistance && bHasDistance) return a.distanceKm - b.distanceKm
+      if (aHasDistance) return -1
+      if (bHasDistance) return 1
+      return toSafeText(a.title).localeCompare(toSafeText(b.title))
+    })
+
+    const nearestProperty =
+      ranked.find((item) => Number.isFinite(item.distanceKm)) ||
+      ranked.find((item) => item.exactLocalityMatch) ||
+      null
+
+    const nearby = ranked.filter(
+      (item) => item.exactLocalityMatch || (Number.isFinite(item.distanceKm) && item.distanceKm <= nearbyRadiusKm),
+    )
+
+    res.json({
+      ok: true,
+      found: resolved.found,
+      query,
+      category,
+      nearbyRadiusKm,
+      resolvedLocation: resolved.found
+        ? { lat: resolved.lat, lon: resolved.lon, displayName: resolved.displayName || query }
+        : null,
+      nearestProperty,
+      totalMatches: ranked.length,
+      nearbyCount: nearby.length,
+      results: nearby.length ? nearby : ranked,
+    })
+  } catch {
+    res.status(500).json({ error: 'Location search failed' })
   }
 })
 
@@ -286,10 +551,20 @@ app.post('/api/uploads/presign', requireAdmin, async (req, res) => {
   }
 })
 
-app.use(express.static(staticRoot))
-app.get(/^\/(?!api).*/, (_req, res) => {
-  res.sendFile(path.join(staticRoot, 'index.html'))
-})
+if (hasBuiltFrontend) {
+  app.use(express.static(staticRoot))
+  app.get(/^\/(?!api).*/, (_req, res) => {
+    res.sendFile(path.join(staticRoot, 'index.html'))
+  })
+} else {
+  console.warn('frontend build missing: run `npm run build` to generate ./dist assets')
+  app.get(/^\/(?!api).*/, (_req, res) => {
+    res
+      .status(503)
+      .type('text/plain')
+      .send('Frontend build is missing. Run `npm run build` and restart the server.')
+  })
+}
 
 app.listen(port, () => {
   console.log(`api listening on :${port}`)

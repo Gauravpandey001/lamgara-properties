@@ -12,20 +12,7 @@ const emptyListing = {
   description: '',
   price: '',
   status: 'For Sale',
-  featured: true,
-  image: '',
-  images: [],
-  videoIframe: '',
-}
-
-const emptySpotlight = {
-  title: '',
-  location: '',
-  latitude: '',
-  longitude: '',
-  description: '',
-  price: '',
-  status: 'For Sale',
+  spotlight: false,
   image: '',
   images: [],
   videoIframe: '',
@@ -43,6 +30,7 @@ const emptyBlog = {
 
 const apiBase = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')
 const presignEndpoint = apiBase ? `${apiBase}/api/uploads/presign` : '/api/uploads/presign'
+const geocodeEndpoint = apiBase ? `${apiBase}/api/geocode` : '/api/geocode'
 
 const normalizeImages = (item) => {
   if (Array.isArray(item.images) && item.images.length) return item.images
@@ -62,14 +50,18 @@ const moveImage = (images, fromIndex, direction) => {
 function AdminPanel({ content, setContent, saveContent, saveState, authToken, onLogout }) {
   usePageSeo({
     title: `Admin Panel | ${content.brand}`,
-    description: 'Manage listings, spotlight properties, and blog posts.',
+    description: 'Manage hero content, listings, spotlight flags, and blogs.',
     robots: 'noindex,nofollow',
   })
 
+  const [activeTab, setActiveTab] = useState('hero')
+  const [showAddListing, setShowAddListing] = useState(false)
+  const [showAddBlog, setShowAddBlog] = useState(false)
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [newListing, setNewListing] = useState(emptyListing)
-  const [newSpotlight, setNewSpotlight] = useState(emptySpotlight)
   const [newBlog, setNewBlog] = useState(emptyBlog)
   const [uploadState, setUploadState] = useState({ key: '', message: '' })
+  const [locationState, setLocationState] = useState({ loading: false, message: '', error: false })
 
   const setUploading = (key, message) => setUploadState({ key, message })
 
@@ -93,23 +85,18 @@ function AdminPanel({ content, setContent, saveContent, saveState, authToken, on
     }
 
     const { uploadUrl, fileUrl } = await presign.json()
-
     const upload = await fetch(uploadUrl, {
       method: 'PUT',
       headers: file.type ? { 'Content-Type': file.type } : {},
       body: file,
     })
 
-    if (!upload.ok) {
-      throw new Error('Upload failed. Check S3 CORS/IAM settings.')
-    }
-
+    if (!upload.ok) throw new Error('Upload failed. Check S3 CORS/IAM settings.')
     return fileUrl
   }
 
   const uploadAndPersist = async (file, folder, key, updateContent) => {
     if (!file) return
-
     try {
       setUploading(key, 'Uploading...')
       const imageUrl = await uploadImageToS3(file, folder)
@@ -128,7 +115,6 @@ function AdminPanel({ content, setContent, saveContent, saveState, authToken, on
 
   const uploadDraft = async (file, folder, key, applyDraft) => {
     if (!file) return
-
     try {
       setUploading(key, 'Uploading...')
       const imageUrl = await uploadImageToS3(file, folder)
@@ -139,157 +125,465 @@ function AdminPanel({ content, setContent, saveContent, saveState, authToken, on
     }
   }
 
-  const addListing = () => {
-    if (!newListing.title || !newListing.location || !newListing.price) return
-    const next = {
-      ...content,
-      listings: [{ id: `l-${Date.now()}`, ...newListing }, ...content.listings],
+  const setLocationMessage = (message, error = false, loading = false) =>
+    setLocationState({ loading, message, error })
+
+  const resolveLocationForDraft = async () => {
+    const query = String(newListing.location || '').trim()
+    if (!query) {
+      setLocationMessage('Enter a location first.', true)
+      return
     }
-    setContent(next)
-    setNewListing(emptyListing)
+
+    try {
+      setLocationMessage('Searching location...', false, true)
+      const response = await fetch(`${geocodeEndpoint}?q=${encodeURIComponent(query)}`)
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(payload?.error || 'Location lookup failed')
+      if (!payload?.found || !Number.isFinite(payload.lat) || !Number.isFinite(payload.lon)) {
+        setLocationMessage('Location not found. Try a nearby town/locality.', true)
+        return
+      }
+      setNewListing((prev) => ({
+        ...prev,
+        location: payload.displayName || query,
+        latitude: String(payload.lat),
+        longitude: String(payload.lon),
+      }))
+      setLocationMessage(`Location pinned at ${payload.lat.toFixed(5)}, ${payload.lon.toFixed(5)}.`)
+    } catch (error) {
+      setLocationMessage(error instanceof Error ? error.message : 'Location lookup failed', true)
+    }
   }
 
-  const addSpotlight = () => {
-    if (!newSpotlight.title || !newSpotlight.location || !newSpotlight.price) return
-    const next = {
-      ...content,
-      spotlight: [{ id: `s-${Date.now()}`, ...newSpotlight }, ...content.spotlight],
+  const updateListing = (id, patch) => {
+    setContent((prev) => ({
+      ...prev,
+      listings: (prev.listings || []).map((item) => (item.id === id ? { ...item, ...patch } : item)),
+    }))
+  }
+
+  const deleteListing = (id) => {
+    setContent((prev) => ({
+      ...prev,
+      listings: (prev.listings || []).filter((item) => item.id !== id),
+    }))
+  }
+
+  const updateBlog = (id, patch) => {
+    setContent((prev) => ({
+      ...prev,
+      blogs: (prev.blogs || []).map((item) => (item.id === id ? { ...item, ...patch } : item)),
+    }))
+  }
+
+  const deleteBlog = (id) => {
+    setContent((prev) => ({
+      ...prev,
+      blogs: (prev.blogs || []).filter((item) => item.id !== id),
+    }))
+  }
+
+  const addListing = () => {
+    if (!newListing.title || !newListing.location || !newListing.price) return
+    if (!newListing.latitude || !newListing.longitude) {
+      setLocationMessage('Search and pin listing location before adding.', true)
+      return
     }
-    setContent(next)
-    setNewSpotlight(emptySpotlight)
+
+    setContent((prev) => ({
+      ...prev,
+      listings: [{ id: `l-${Date.now()}`, ...newListing }, ...(prev.listings || [])],
+    }))
+    setNewListing(emptyListing)
+    setLocationState({ loading: false, message: '', error: false })
+    setShowAddListing(false)
   }
 
   const addBlog = () => {
     if (!newBlog.title || !newBlog.excerpt || !newBlog.content) return
-    const next = {
-      ...content,
-      blogs: [{ id: `b-${Date.now()}`, ...newBlog }, ...(content.blogs || [])],
-    }
-    setContent(next)
+    setContent((prev) => ({
+      ...prev,
+      blogs: [{ id: `b-${Date.now()}`, ...newBlog }, ...(prev.blogs || [])],
+    }))
     setNewBlog(emptyBlog)
+    setShowAddBlog(false)
   }
 
-  return (
-    <div className="admin-shell">
-      <aside className="admin-sidebar">
-        <h2>Admin</h2>
-        <p>Edit content, upload images, then save.</p>
-        <Link to="/" className="button outline">
-          Open Website
-        </Link>
-        <button type="button" className="button" onClick={() => saveContent()}>
-          Save All Changes
-        </button>
-        <button type="button" className="button ghost" onClick={onLogout}>
-          Logout
-        </button>
-        {saveState ? <p className="note">{saveState}</p> : null}
-        {uploadState.message ? <p className="note">{uploadState.message}</p> : null}
-      </aside>
+  const renderHeroTab = () => (
+    <section className="panel">
+      <h3>Hero Title & Branding</h3>
+      <div className="admin-grid">
+        <label>
+          Brand
+          <input value={content.brand} onChange={(e) => setContent({ ...content, brand: e.target.value })} />
+        </label>
+        <label>
+          Hero Kicker
+          <input
+            value={content.hero.kicker}
+            onChange={(e) => setContent({ ...content, hero: { ...content.hero, kicker: e.target.value } })}
+          />
+        </label>
+        <label>
+          Hero Title
+          <input
+            value={content.hero.title}
+            onChange={(e) => setContent({ ...content, hero: { ...content.hero, title: e.target.value } })}
+          />
+        </label>
+        <label className="span-2">
+          Hero Description
+          <textarea
+            rows="3"
+            value={content.hero.description}
+            onChange={(e) =>
+              setContent({
+                ...content,
+                hero: { ...content.hero, description: e.target.value },
+              })
+            }
+          />
+        </label>
+        <div className="uploader span-2">
+          <p>Hero Image</p>
+          <input
+            type="file"
+            accept="image/*"
+            onChange={async (e) => {
+              const file = e.target.files?.[0]
+              await uploadAndPersist(file, 'hero', 'hero', (prev, url) => ({
+                ...prev,
+                hero: { ...prev.hero, image: url },
+              }))
+              e.target.value = ''
+            }}
+          />
+          {uploadState.key === 'hero' ? <small>{uploadState.message}</small> : null}
+        </div>
+      </div>
+      {content.hero.image ? (
+        <div className="preview" style={{ marginTop: '0.75rem' }}>
+          <img src={content.hero.image} alt="Hero" />
+        </div>
+      ) : null}
+    </section>
+  )
 
-      <main className="admin-main">
-        <section className="panel">
-          <h3>Brand & Hero</h3>
-          <div className="admin-grid">
-            <label>
-              Brand
-              <input
-                value={content.brand}
-                onChange={(e) => setContent({ ...content, brand: e.target.value })}
-              />
-            </label>
-            <label>
-              Hero Kicker
-              <input
-                value={content.hero.kicker}
-                onChange={(e) =>
-                  setContent({ ...content, hero: { ...content.hero, kicker: e.target.value } })
-                }
-              />
-            </label>
-            <label>
-              Hero Title
-              <input
-                value={content.hero.title}
-                onChange={(e) =>
-                  setContent({ ...content, hero: { ...content.hero, title: e.target.value } })
-                }
-              />
-            </label>
-            <label className="span-2">
-              Hero Description
-              <textarea
-                rows="3"
-                value={content.hero.description}
-                onChange={(e) =>
-                  setContent({
-                    ...content,
-                    hero: { ...content.hero, description: e.target.value },
-                  })
-                }
-              />
-            </label>
-            <div className="uploader span-2">
-              <p>Hero Image</p>
-              <input
-                type="file"
-                accept="image/*"
-                onChange={async (e) => {
-                  const file = e.target.files?.[0]
-                  await uploadAndPersist(file, 'hero', 'hero', (prev, url) => ({
-                    ...prev,
-                    hero: {
-                      ...prev.hero,
-                      image: url,
-                    },
-                  }))
-                  e.target.value = ''
-                }}
-              />
-              {uploadState.key === 'hero' ? <small>{uploadState.message}</small> : null}
-            </div>
-            {content.hero.image ? (
-              <div className="preview span-2">
-                <img src={content.hero.image} alt="Hero" />
+  const renderListingsTab = () => (
+    <>
+      <section className="panel">
+        <div className="admin-tab-head">
+          <h3 className="admin-tab-title">Listings</h3>
+          <button type="button" className="button" onClick={() => setShowAddListing(true)}>
+            Add New Listing
+          </button>
+        </div>
+      </section>
+
+      <section className="panel">
+        <h3>Manage Listings</h3>
+        <div className="stack">
+          {(content.listings || []).map((item) => (
+            <article className="editor" key={item.id}>
+              <div className="admin-grid">
+                <input value={item.title || ''} onChange={(e) => updateListing(item.id, { title: e.target.value })} />
+                <input value={item.location || ''} onChange={(e) => updateListing(item.id, { location: e.target.value })} />
+                <input
+                  placeholder="Latitude"
+                  value={item.latitude || ''}
+                  onChange={(e) => updateListing(item.id, { latitude: e.target.value })}
+                />
+                <input
+                  placeholder="Longitude"
+                  value={item.longitude || ''}
+                  onChange={(e) => updateListing(item.id, { longitude: e.target.value })}
+                />
+                <input value={item.size || ''} onChange={(e) => updateListing(item.id, { size: e.target.value })} />
+                <input value={item.category || ''} onChange={(e) => updateListing(item.id, { category: e.target.value })} />
+                <textarea
+                  className="span-2"
+                  rows="3"
+                  value={item.description || ''}
+                  onChange={(e) => updateListing(item.id, { description: e.target.value })}
+                />
+                <input value={item.price || ''} onChange={(e) => updateListing(item.id, { price: e.target.value })} />
+                <select value={item.status || 'For Sale'} onChange={(e) => updateListing(item.id, { status: e.target.value })}>
+                  <option>For Sale</option>
+                  <option>New Listing</option>
+                  <option>Hot Listing</option>
+                </select>
+                <label className="span-2">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(item.spotlight)}
+                    onChange={(e) => updateListing(item.id, { spotlight: e.target.checked })}
+                  />
+                  Show In Spotlight
+                </label>
+                <textarea
+                  className="span-2"
+                  rows="3"
+                  value={item.videoIframe || ''}
+                  onChange={(e) => updateListing(item.id, { videoIframe: e.target.value })}
+                />
+                <div className="uploader span-2">
+                  <p>Replace Image</p>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0]
+                      await uploadAndPersist(file, 'listings', `listing-${item.id}`, (prev, url) => ({
+                        ...prev,
+                        listings: (prev.listings || []).map((x) =>
+                          x.id === item.id
+                            ? {
+                                ...x,
+                                image: x.image || url,
+                                images: [...(x.images || (x.image ? [x.image] : [])), url],
+                              }
+                            : x,
+                        ),
+                      }))
+                      e.target.value = ''
+                    }}
+                  />
+                </div>
+                {normalizeImages(item).length ? (
+                  <div className="gallery span-2">
+                    {normalizeImages(item).map((img, idx) => (
+                      <div key={`${item.id}-img-${idx}`} className="gallery-item">
+                        <div className="gallery-preview" style={{ backgroundImage: `url(${img})` }} />
+                        <div className="gallery-actions">
+                          <button
+                            type="button"
+                            className="button tiny"
+                            disabled={idx === 0}
+                            onClick={() =>
+                              setContent((prev) => ({
+                                ...prev,
+                                listings: (prev.listings || []).map((x) => {
+                                  if (x.id !== item.id) return x
+                                  const nextImages = moveImage(normalizeImages(x), idx, -1)
+                                  return { ...x, images: nextImages, image: nextImages[0] || '' }
+                                }),
+                              }))
+                            }
+                          >
+                            Move Left
+                          </button>
+                          <button
+                            type="button"
+                            className="button tiny"
+                            disabled={idx === normalizeImages(item).length - 1}
+                            onClick={() =>
+                              setContent((prev) => ({
+                                ...prev,
+                                listings: (prev.listings || []).map((x) => {
+                                  if (x.id !== item.id) return x
+                                  const nextImages = moveImage(normalizeImages(x), idx, 1)
+                                  return { ...x, images: nextImages, image: nextImages[0] || '' }
+                                }),
+                              }))
+                            }
+                          >
+                            Move Right
+                          </button>
+                        </div>
+                        <button
+                          type="button"
+                          className="button ghost tiny"
+                          onClick={() =>
+                            setContent((prev) => ({
+                              ...prev,
+                              listings: (prev.listings || []).map((x) => {
+                                if (x.id !== item.id) return x
+                                const nextImages = normalizeImages(x).filter((_, i) => i !== idx)
+                                return { ...x, images: nextImages, image: nextImages[0] || '' }
+                              }),
+                            }))
+                          }
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
               </div>
-            ) : null}
-          </div>
-        </section>
+              <div className="row-end">
+                <button type="button" className="button ghost" onClick={() => deleteListing(item.id)}>
+                  Delete
+                </button>
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
+    </>
+  )
 
-        <section className="panel">
-          <h3>Add Listing</h3>
+  const renderBlogsTab = () => (
+    <>
+      <section className="panel">
+        <div className="admin-tab-head">
+          <h3 className="admin-tab-title">Blogs</h3>
+          <button type="button" className="button" onClick={() => setShowAddBlog(true)}>
+            Add New Blog
+          </button>
+        </div>
+      </section>
+
+      <section className="panel">
+        <h3>Manage Blogs</h3>
+        <div className="stack">
+          {(content.blogs || []).map((item) => (
+            <article className="editor" key={item.id}>
+              <div className="admin-grid">
+                <input value={item.title || ''} onChange={(e) => updateBlog(item.id, { title: e.target.value })} />
+                <input value={item.category || ''} onChange={(e) => updateBlog(item.id, { category: e.target.value })} />
+                <input type="date" value={item.date || ''} onChange={(e) => updateBlog(item.id, { date: e.target.value })} />
+                <textarea
+                  className="span-2"
+                  rows="3"
+                  value={item.excerpt || ''}
+                  onChange={(e) => updateBlog(item.id, { excerpt: e.target.value })}
+                />
+                <textarea
+                  className="span-2"
+                  rows="6"
+                  value={item.content || ''}
+                  onChange={(e) => updateBlog(item.id, { content: e.target.value })}
+                />
+                <div className="uploader span-2">
+                  <p>Upload Blog Image</p>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0]
+                      await uploadAndPersist(file, 'blogs', `blog-${item.id}`, (prev, url) => ({
+                        ...prev,
+                        blogs: (prev.blogs || []).map((x) =>
+                          x.id === item.id
+                            ? {
+                                ...x,
+                                image: x.image || url,
+                                images: [...(x.images || (x.image ? [x.image] : [])), url],
+                              }
+                            : x,
+                        ),
+                      }))
+                      e.target.value = ''
+                    }}
+                  />
+                </div>
+                {normalizeImages(item).length ? (
+                  <div className="gallery span-2">
+                    {normalizeImages(item).map((img, idx) => (
+                      <div key={`${item.id}-blog-img-${idx}`} className="gallery-item">
+                        <div className="gallery-preview" style={{ backgroundImage: `url(${img})` }} />
+                        <div className="gallery-actions">
+                          <button
+                            type="button"
+                            className="button tiny"
+                            disabled={idx === 0}
+                            onClick={() =>
+                              setContent((prev) => ({
+                                ...prev,
+                                blogs: (prev.blogs || []).map((x) => {
+                                  if (x.id !== item.id) return x
+                                  const nextImages = moveImage(normalizeImages(x), idx, -1)
+                                  return { ...x, images: nextImages, image: nextImages[0] || '' }
+                                }),
+                              }))
+                            }
+                          >
+                            Move Left
+                          </button>
+                          <button
+                            type="button"
+                            className="button tiny"
+                            disabled={idx === normalizeImages(item).length - 1}
+                            onClick={() =>
+                              setContent((prev) => ({
+                                ...prev,
+                                blogs: (prev.blogs || []).map((x) => {
+                                  if (x.id !== item.id) return x
+                                  const nextImages = moveImage(normalizeImages(x), idx, 1)
+                                  return { ...x, images: nextImages, image: nextImages[0] || '' }
+                                }),
+                              }))
+                            }
+                          >
+                            Move Right
+                          </button>
+                        </div>
+                        <button
+                          type="button"
+                          className="button ghost tiny"
+                          onClick={() =>
+                            setContent((prev) => ({
+                              ...prev,
+                              blogs: (prev.blogs || []).map((x) => {
+                                if (x.id !== item.id) return x
+                                const nextImages = normalizeImages(x).filter((_, i) => i !== idx)
+                                return { ...x, images: nextImages, image: nextImages[0] || '' }
+                              }),
+                            }))
+                          }
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+              <div className="row-end">
+                <button type="button" className="button ghost" onClick={() => deleteBlog(item.id)}>
+                  Delete
+                </button>
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
+    </>
+  )
+
+  const renderListingModal = () => {
+    if (!showAddListing) return null
+
+    return (
+      <div className="auth-wrap modal-overlay">
+        <article className="auth-card modal-card">
+          <h3 className="admin-tab-title">Add New Listing</h3>
           <div className="admin-grid">
-            <input
-              placeholder="Title"
-              value={newListing.title}
-              onChange={(e) => setNewListing({ ...newListing, title: e.target.value })}
-            />
+            <input placeholder="Title" value={newListing.title} onChange={(e) => setNewListing({ ...newListing, title: e.target.value })} />
             <input
               placeholder="Location / Locality"
               value={newListing.location}
               onChange={(e) => setNewListing({ ...newListing, location: e.target.value })}
               required
             />
-            <input
-              placeholder="Latitude (e.g. 29.3803)"
-              value={newListing.latitude}
-              onChange={(e) => setNewListing({ ...newListing, latitude: e.target.value })}
-            />
-            <input
-              placeholder="Longitude (e.g. 79.4636)"
-              value={newListing.longitude}
-              onChange={(e) => setNewListing({ ...newListing, longitude: e.target.value })}
-            />
-            <input
-              placeholder="Size"
-              value={newListing.size}
-              onChange={(e) => setNewListing({ ...newListing, size: e.target.value })}
-            />
-            <input
-              placeholder="Category"
-              value={newListing.category}
-              onChange={(e) => setNewListing({ ...newListing, category: e.target.value })}
-            />
+            <div className="uploader span-2">
+              <p>Pin Listing Location</p>
+              <button type="button" className="button tiny" onClick={resolveLocationForDraft} disabled={locationState.loading}>
+                {locationState.loading ? 'Searching...' : 'Search & Set Coordinates'}
+              </button>
+              {newListing.latitude && newListing.longitude ? (
+                <small>Coordinates set: {newListing.latitude}, {newListing.longitude}</small>
+              ) : (
+                <small>Use location search instead of manual latitude/longitude entry.</small>
+              )}
+              {locationState.message ? (
+                <small className={locationState.error ? 'auth-error' : ''}>{locationState.message}</small>
+              ) : null}
+            </div>
+            <input placeholder="Size" value={newListing.size} onChange={(e) => setNewListing({ ...newListing, size: e.target.value })} />
+            <input placeholder="Category" value={newListing.category} onChange={(e) => setNewListing({ ...newListing, category: e.target.value })} />
             <textarea
               className="span-2"
               rows="3"
@@ -297,19 +591,20 @@ function AdminPanel({ content, setContent, saveContent, saveState, authToken, on
               value={newListing.description}
               onChange={(e) => setNewListing({ ...newListing, description: e.target.value })}
             />
-            <input
-              placeholder="Price"
-              value={newListing.price}
-              onChange={(e) => setNewListing({ ...newListing, price: e.target.value })}
-            />
-            <select
-              value={newListing.status}
-              onChange={(e) => setNewListing({ ...newListing, status: e.target.value })}
-            >
+            <input placeholder="Price" value={newListing.price} onChange={(e) => setNewListing({ ...newListing, price: e.target.value })} />
+            <select value={newListing.status} onChange={(e) => setNewListing({ ...newListing, status: e.target.value })}>
               <option>For Sale</option>
               <option>New Listing</option>
               <option>Hot Listing</option>
             </select>
+            <label className="span-2">
+              <input
+                type="checkbox"
+                checked={Boolean(newListing.spotlight)}
+                onChange={(e) => setNewListing({ ...newListing, spotlight: e.target.checked })}
+              />
+              Show In Spotlight
+            </label>
             <textarea
               className="span-2"
               rows="3"
@@ -334,9 +629,7 @@ function AdminPanel({ content, setContent, saveContent, saveState, authToken, on
                   e.target.value = ''
                 }}
               />
-              {newListing.images?.length ? (
-                <small>{newListing.images.length} image(s) attached.</small>
-              ) : null}
+              {newListing.images?.length ? <small>{newListing.images.length} image(s) attached.</small> : null}
             </div>
             {newListing.images?.length ? (
               <div className="gallery span-2">
@@ -351,11 +644,7 @@ function AdminPanel({ content, setContent, saveContent, saveState, authToken, on
                         onClick={() =>
                           setNewListing((prev) => {
                             const nextImages = moveImage(prev.images || [], idx, -1)
-                            return {
-                              ...prev,
-                              images: nextImages,
-                              image: nextImages[0] || '',
-                            }
+                            return { ...prev, images: nextImages, image: nextImages[0] || '' }
                           })
                         }
                       >
@@ -368,11 +657,7 @@ function AdminPanel({ content, setContent, saveContent, saveState, authToken, on
                         onClick={() =>
                           setNewListing((prev) => {
                             const nextImages = moveImage(prev.images || [], idx, 1)
-                            return {
-                              ...prev,
-                              images: nextImages,
-                              image: nextImages[0] || '',
-                            }
+                            return { ...prev, images: nextImages, image: nextImages[0] || '' }
                           })
                         }
                       >
@@ -384,12 +669,8 @@ function AdminPanel({ content, setContent, saveContent, saveState, authToken, on
                       className="button ghost tiny"
                       onClick={() =>
                         setNewListing((prev) => {
-                          const nextImages = prev.images.filter((_, i) => i !== idx)
-                          return {
-                            ...prev,
-                            images: nextImages,
-                            image: nextImages[0] || '',
-                          }
+                          const nextImages = (prev.images || []).filter((_, i) => i !== idx)
+                          return { ...prev, images: nextImages, image: nextImages[0] || '' }
                         })
                       }
                     >
@@ -400,626 +681,30 @@ function AdminPanel({ content, setContent, saveContent, saveState, authToken, on
               </div>
             ) : null}
           </div>
-          <button type="button" className="button" onClick={addListing}>
-            Add Listing
-          </button>
-        </section>
-
-        <section className="panel">
-          <h3>Manage Listings</h3>
-          <div className="stack">
-            {content.listings.map((item) => (
-              <article className="editor" key={item.id}>
-                <div className="admin-grid">
-                  <input
-                    value={item.title}
-                    onChange={(e) =>
-                      setContent({
-                        ...content,
-                        listings: content.listings.map((x) =>
-                          x.id === item.id ? { ...x, title: e.target.value } : x,
-                        ),
-                      })
-                    }
-                  />
-                  <input
-                    value={item.location}
-                    onChange={(e) =>
-                      setContent({
-                        ...content,
-                        listings: content.listings.map((x) =>
-                          x.id === item.id ? { ...x, location: e.target.value } : x,
-                        ),
-                      })
-                    }
-                  />
-                  <input
-                    placeholder="Latitude"
-                    value={item.latitude || ''}
-                    onChange={(e) =>
-                      setContent({
-                        ...content,
-                        listings: content.listings.map((x) =>
-                          x.id === item.id ? { ...x, latitude: e.target.value } : x,
-                        ),
-                      })
-                    }
-                  />
-                  <input
-                    placeholder="Longitude"
-                    value={item.longitude || ''}
-                    onChange={(e) =>
-                      setContent({
-                        ...content,
-                        listings: content.listings.map((x) =>
-                          x.id === item.id ? { ...x, longitude: e.target.value } : x,
-                        ),
-                      })
-                    }
-                  />
-                  <input
-                    value={item.size}
-                    onChange={(e) =>
-                      setContent({
-                        ...content,
-                        listings: content.listings.map((x) =>
-                          x.id === item.id ? { ...x, size: e.target.value } : x,
-                        ),
-                      })
-                    }
-                  />
-                  <input
-                    value={item.category}
-                    onChange={(e) =>
-                      setContent({
-                        ...content,
-                        listings: content.listings.map((x) =>
-                          x.id === item.id ? { ...x, category: e.target.value } : x,
-                        ),
-                      })
-                    }
-                  />
-                  <textarea
-                    className="span-2"
-                    rows="3"
-                    value={item.description || ''}
-                    onChange={(e) =>
-                      setContent({
-                        ...content,
-                        listings: content.listings.map((x) =>
-                          x.id === item.id ? { ...x, description: e.target.value } : x,
-                        ),
-                      })
-                    }
-                  />
-                  <input
-                    value={item.price}
-                    onChange={(e) =>
-                      setContent({
-                        ...content,
-                        listings: content.listings.map((x) =>
-                          x.id === item.id ? { ...x, price: e.target.value } : x,
-                        ),
-                      })
-                    }
-                  />
-                  <select
-                    value={item.status}
-                    onChange={(e) =>
-                      setContent({
-                        ...content,
-                        listings: content.listings.map((x) =>
-                          x.id === item.id ? { ...x, status: e.target.value } : x,
-                        ),
-                      })
-                    }
-                  >
-                    <option>For Sale</option>
-                    <option>New Listing</option>
-                    <option>Hot Listing</option>
-                  </select>
-                  <textarea
-                    className="span-2"
-                    rows="3"
-                    value={item.videoIframe || ''}
-                    onChange={(e) =>
-                      setContent({
-                        ...content,
-                        listings: content.listings.map((x) =>
-                          x.id === item.id ? { ...x, videoIframe: e.target.value } : x,
-                        ),
-                      })
-                    }
-                  />
-                  <div className="uploader span-2">
-                    <p>Replace Image</p>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={async (e) => {
-                        const file = e.target.files?.[0]
-                        await uploadAndPersist(file, 'listings', `listing-${item.id}`, (prev, url) => ({
-                          ...prev,
-                          listings: prev.listings.map((x) =>
-                            x.id === item.id
-                              ? {
-                                  ...x,
-                                  image: x.image || url,
-                                  images: [...(x.images || (x.image ? [x.image] : [])), url],
-                                }
-                              : x,
-                          ),
-                        }))
-                        e.target.value = ''
-                      }}
-                    />
-                  </div>
-                  {normalizeImages(item).length ? (
-                    <div className="gallery span-2">
-                      {normalizeImages(item).map((img, idx) => (
-                        <div key={`${item.id}-img-${idx}`} className="gallery-item">
-                          <div className="gallery-preview" style={{ backgroundImage: `url(${img})` }} />
-                          <div className="gallery-actions">
-                            <button
-                              type="button"
-                              className="button tiny"
-                              disabled={idx === 0}
-                              onClick={() =>
-                                setContent((prev) => ({
-                                  ...prev,
-                                  listings: prev.listings.map((x) => {
-                                    if (x.id !== item.id) return x
-                                    const current = normalizeImages(x)
-                                    const nextImages = moveImage(current, idx, -1)
-                                    return {
-                                      ...x,
-                                      images: nextImages,
-                                      image: nextImages[0] || '',
-                                    }
-                                  }),
-                                }))
-                              }
-                            >
-                              Move Left
-                            </button>
-                            <button
-                              type="button"
-                              className="button tiny"
-                              disabled={idx === normalizeImages(item).length - 1}
-                              onClick={() =>
-                                setContent((prev) => ({
-                                  ...prev,
-                                  listings: prev.listings.map((x) => {
-                                    if (x.id !== item.id) return x
-                                    const current = normalizeImages(x)
-                                    const nextImages = moveImage(current, idx, 1)
-                                    return {
-                                      ...x,
-                                      images: nextImages,
-                                      image: nextImages[0] || '',
-                                    }
-                                  }),
-                                }))
-                              }
-                            >
-                              Move Right
-                            </button>
-                          </div>
-                          <button
-                            type="button"
-                            className="button ghost tiny"
-                            onClick={() =>
-                              setContent((prev) => ({
-                                ...prev,
-                                listings: prev.listings.map((x) => {
-                                  if (x.id !== item.id) return x
-                                  const current = normalizeImages(x)
-                                  const nextImages = current.filter((_, i) => i !== idx)
-                                  return {
-                                    ...x,
-                                    images: nextImages,
-                                    image: nextImages[0] || '',
-                                  }
-                                }),
-                              }))
-                            }
-                          >
-                            Remove
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-                <div className="row-end">
-                  <button
-                    type="button"
-                    className="button ghost"
-                    onClick={() =>
-                      setContent({
-                        ...content,
-                        listings: content.listings.filter((x) => x.id !== item.id),
-                      })
-                    }
-                  >
-                    Delete
-                  </button>
-                </div>
-              </article>
-            ))}
+          <div className="row-end">
+            <button type="button" className="button outline" onClick={() => setShowAddListing(false)}>
+              Cancel
+            </button>
+            <button type="button" className="button" onClick={addListing}>
+              Add Listing
+            </button>
           </div>
-        </section>
+        </article>
+      </div>
+    )
+  }
 
-        <section className="panel">
-          <h3>Add Spotlight</h3>
+  const renderBlogModal = () => {
+    if (!showAddBlog) return null
+
+    return (
+      <div className="auth-wrap modal-overlay">
+        <article className="auth-card modal-card">
+          <h3 className="admin-tab-title">Add New Blog</h3>
           <div className="admin-grid">
-            <input
-              placeholder="Title"
-              value={newSpotlight.title}
-              onChange={(e) => setNewSpotlight({ ...newSpotlight, title: e.target.value })}
-            />
-            <input
-              placeholder="Location / Locality"
-              value={newSpotlight.location}
-              onChange={(e) => setNewSpotlight({ ...newSpotlight, location: e.target.value })}
-              required
-            />
-            <input
-              placeholder="Latitude (e.g. 29.3803)"
-              value={newSpotlight.latitude}
-              onChange={(e) => setNewSpotlight({ ...newSpotlight, latitude: e.target.value })}
-            />
-            <input
-              placeholder="Longitude (e.g. 79.4636)"
-              value={newSpotlight.longitude}
-              onChange={(e) => setNewSpotlight({ ...newSpotlight, longitude: e.target.value })}
-            />
-            <textarea
-              className="span-2"
-              rows="3"
-              placeholder="Description"
-              value={newSpotlight.description}
-              onChange={(e) =>
-                setNewSpotlight({ ...newSpotlight, description: e.target.value })
-              }
-            />
-            <input
-              placeholder="Price"
-              value={newSpotlight.price}
-              onChange={(e) => setNewSpotlight({ ...newSpotlight, price: e.target.value })}
-            />
-            <select
-              value={newSpotlight.status}
-              onChange={(e) => setNewSpotlight({ ...newSpotlight, status: e.target.value })}
-            >
-              <option>For Sale</option>
-              <option>New Listing</option>
-              <option>Hot Listing</option>
-            </select>
-            <textarea
-              className="span-2"
-              rows="3"
-              placeholder="YouTube iframe (optional)"
-              value={newSpotlight.videoIframe}
-              onChange={(e) => setNewSpotlight({ ...newSpotlight, videoIframe: e.target.value })}
-            />
-            <div className="uploader span-2">
-              <p>Spotlight Image</p>
-              <input
-                type="file"
-                accept="image/*"
-                onChange={async (e) => {
-                  const file = e.target.files?.[0]
-                  await uploadDraft(file, 'spotlight', 'new-spotlight', (url) =>
-                    setNewSpotlight((prev) => ({
-                      ...prev,
-                      image: prev.image || url,
-                      images: [...(prev.images || []), url],
-                    })),
-                  )
-                  e.target.value = ''
-                }}
-              />
-              {newSpotlight.images?.length ? (
-                <small>{newSpotlight.images.length} image(s) attached.</small>
-              ) : null}
-            </div>
-            {newSpotlight.images?.length ? (
-              <div className="gallery span-2">
-                {newSpotlight.images.map((img, idx) => (
-                  <div key={`new-spotlight-${idx}`} className="gallery-item">
-                    <div className="gallery-preview" style={{ backgroundImage: `url(${img})` }} />
-                    <div className="gallery-actions">
-                      <button
-                        type="button"
-                        className="button tiny"
-                        disabled={idx === 0}
-                        onClick={() =>
-                          setNewSpotlight((prev) => {
-                            const nextImages = moveImage(prev.images || [], idx, -1)
-                            return {
-                              ...prev,
-                              images: nextImages,
-                              image: nextImages[0] || '',
-                            }
-                          })
-                        }
-                      >
-                        Move Left
-                      </button>
-                      <button
-                        type="button"
-                        className="button tiny"
-                        disabled={idx === newSpotlight.images.length - 1}
-                        onClick={() =>
-                          setNewSpotlight((prev) => {
-                            const nextImages = moveImage(prev.images || [], idx, 1)
-                            return {
-                              ...prev,
-                              images: nextImages,
-                              image: nextImages[0] || '',
-                            }
-                          })
-                        }
-                      >
-                        Move Right
-                      </button>
-                    </div>
-                    <button
-                      type="button"
-                      className="button ghost tiny"
-                      onClick={() =>
-                        setNewSpotlight((prev) => {
-                          const nextImages = prev.images.filter((_, i) => i !== idx)
-                          return {
-                            ...prev,
-                            images: nextImages,
-                            image: nextImages[0] || '',
-                          }
-                        })
-                      }
-                    >
-                      Remove
-                    </button>
-                  </div>
-                ))}
-              </div>
-            ) : null}
-          </div>
-          <button type="button" className="button" onClick={addSpotlight}>
-            Add Spotlight
-          </button>
-        </section>
-
-        <section className="panel">
-          <h3>Manage Spotlight</h3>
-          <div className="stack">
-            {(content.spotlight || []).map((item) => (
-              <article className="editor" key={item.id}>
-                <div className="admin-grid">
-                  <input
-                    value={item.title}
-                    onChange={(e) =>
-                      setContent({
-                        ...content,
-                        spotlight: (content.spotlight || []).map((x) =>
-                          x.id === item.id ? { ...x, title: e.target.value } : x,
-                        ),
-                      })
-                    }
-                  />
-                  <input
-                    value={item.location}
-                    onChange={(e) =>
-                      setContent({
-                        ...content,
-                        spotlight: (content.spotlight || []).map((x) =>
-                          x.id === item.id ? { ...x, location: e.target.value } : x,
-                        ),
-                      })
-                    }
-                  />
-                  <input
-                    placeholder="Latitude"
-                    value={item.latitude || ''}
-                    onChange={(e) =>
-                      setContent({
-                        ...content,
-                        spotlight: (content.spotlight || []).map((x) =>
-                          x.id === item.id ? { ...x, latitude: e.target.value } : x,
-                        ),
-                      })
-                    }
-                  />
-                  <input
-                    placeholder="Longitude"
-                    value={item.longitude || ''}
-                    onChange={(e) =>
-                      setContent({
-                        ...content,
-                        spotlight: (content.spotlight || []).map((x) =>
-                          x.id === item.id ? { ...x, longitude: e.target.value } : x,
-                        ),
-                      })
-                    }
-                  />
-                  <textarea
-                    className="span-2"
-                    rows="3"
-                    value={item.description || ''}
-                    onChange={(e) =>
-                      setContent({
-                        ...content,
-                        spotlight: (content.spotlight || []).map((x) =>
-                          x.id === item.id ? { ...x, description: e.target.value } : x,
-                        ),
-                      })
-                    }
-                  />
-                  <input
-                    value={item.price}
-                    onChange={(e) =>
-                      setContent({
-                        ...content,
-                        spotlight: (content.spotlight || []).map((x) =>
-                          x.id === item.id ? { ...x, price: e.target.value } : x,
-                        ),
-                      })
-                    }
-                  />
-                  <select
-                    value={item.status}
-                    onChange={(e) =>
-                      setContent({
-                        ...content,
-                        spotlight: (content.spotlight || []).map((x) =>
-                          x.id === item.id ? { ...x, status: e.target.value } : x,
-                        ),
-                      })
-                    }
-                  >
-                    <option>For Sale</option>
-                    <option>New Listing</option>
-                    <option>Hot Listing</option>
-                  </select>
-                  <textarea
-                    className="span-2"
-                    rows="3"
-                    value={item.videoIframe || ''}
-                    onChange={(e) =>
-                      setContent({
-                        ...content,
-                        spotlight: (content.spotlight || []).map((x) =>
-                          x.id === item.id ? { ...x, videoIframe: e.target.value } : x,
-                        ),
-                      })
-                    }
-                  />
-                  <div className="uploader span-2">
-                    <p>Upload Spotlight Image</p>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={async (e) => {
-                        const file = e.target.files?.[0]
-                        await uploadAndPersist(file, 'spotlight', `spotlight-${item.id}`, (prev, url) => ({
-                          ...prev,
-                          spotlight: (prev.spotlight || []).map((x) =>
-                            x.id === item.id
-                              ? {
-                                  ...x,
-                                  image: x.image || url,
-                                  images: [...(x.images || (x.image ? [x.image] : [])), url],
-                                }
-                              : x,
-                          ),
-                        }))
-                        e.target.value = ''
-                      }}
-                    />
-                  </div>
-                  {normalizeImages(item).length ? (
-                    <div className="gallery span-2">
-                      {normalizeImages(item).map((img, idx) => (
-                        <div key={`${item.id}-spotlight-img-${idx}`} className="gallery-item">
-                          <div className="gallery-preview" style={{ backgroundImage: `url(${img})` }} />
-                          <div className="gallery-actions">
-                            <button
-                              type="button"
-                              className="button tiny"
-                              disabled={idx === 0}
-                              onClick={() =>
-                                setContent((prev) => ({
-                                  ...prev,
-                                  spotlight: (prev.spotlight || []).map((x) => {
-                                    if (x.id !== item.id) return x
-                                    const current = normalizeImages(x)
-                                    const nextImages = moveImage(current, idx, -1)
-                                    return { ...x, images: nextImages, image: nextImages[0] || '' }
-                                  }),
-                                }))
-                              }
-                            >
-                              Move Left
-                            </button>
-                            <button
-                              type="button"
-                              className="button tiny"
-                              disabled={idx === normalizeImages(item).length - 1}
-                              onClick={() =>
-                                setContent((prev) => ({
-                                  ...prev,
-                                  spotlight: (prev.spotlight || []).map((x) => {
-                                    if (x.id !== item.id) return x
-                                    const current = normalizeImages(x)
-                                    const nextImages = moveImage(current, idx, 1)
-                                    return { ...x, images: nextImages, image: nextImages[0] || '' }
-                                  }),
-                                }))
-                              }
-                            >
-                              Move Right
-                            </button>
-                          </div>
-                          <button
-                            type="button"
-                            className="button ghost tiny"
-                            onClick={() =>
-                              setContent((prev) => ({
-                                ...prev,
-                                spotlight: (prev.spotlight || []).map((x) => {
-                                  if (x.id !== item.id) return x
-                                  const current = normalizeImages(x)
-                                  const nextImages = current.filter((_, i) => i !== idx)
-                                  return { ...x, images: nextImages, image: nextImages[0] || '' }
-                                }),
-                              }))
-                            }
-                          >
-                            Remove
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-                <div className="row-end">
-                  <button
-                    type="button"
-                    className="button ghost"
-                    onClick={() =>
-                      setContent({
-                        ...content,
-                        spotlight: (content.spotlight || []).filter((x) => x.id !== item.id),
-                      })
-                    }
-                  >
-                    Delete
-                  </button>
-                </div>
-              </article>
-            ))}
-          </div>
-        </section>
-
-        <section className="panel">
-          <h3>Add Blog</h3>
-          <div className="admin-grid">
-            <input
-              placeholder="Title"
-              value={newBlog.title}
-              onChange={(e) => setNewBlog({ ...newBlog, title: e.target.value })}
-            />
-            <input
-              placeholder="Category"
-              value={newBlog.category}
-              onChange={(e) => setNewBlog({ ...newBlog, category: e.target.value })}
-            />
-            <input
-              type="date"
-              value={newBlog.date}
-              onChange={(e) => setNewBlog({ ...newBlog, date: e.target.value })}
-            />
+            <input placeholder="Title" value={newBlog.title} onChange={(e) => setNewBlog({ ...newBlog, title: e.target.value })} />
+            <input placeholder="Category" value={newBlog.category} onChange={(e) => setNewBlog({ ...newBlog, category: e.target.value })} />
+            <input type="date" value={newBlog.date} onChange={(e) => setNewBlog({ ...newBlog, date: e.target.value })} />
             <textarea
               className="span-2"
               rows="3"
@@ -1091,7 +776,7 @@ function AdminPanel({ content, setContent, saveContent, saveState, authToken, on
                       className="button ghost tiny"
                       onClick={() =>
                         setNewBlog((prev) => {
-                          const nextImages = prev.images.filter((_, i) => i !== idx)
+                          const nextImages = (prev.images || []).filter((_, i) => i !== idx)
                           return { ...prev, images: nextImages, image: nextImages[0] || '' }
                         })
                       }
@@ -1103,184 +788,85 @@ function AdminPanel({ content, setContent, saveContent, saveState, authToken, on
               </div>
             ) : null}
           </div>
-          <button type="button" className="button" onClick={addBlog}>
-            Add Blog
-          </button>
-        </section>
-
-        <section className="panel">
-          <h3>Manage Blogs</h3>
-          <div className="stack">
-            {(content.blogs || []).map((item) => (
-              <article className="editor" key={item.id}>
-                <div className="admin-grid">
-                  <input
-                    value={item.title}
-                    onChange={(e) =>
-                      setContent({
-                        ...content,
-                        blogs: (content.blogs || []).map((x) =>
-                          x.id === item.id ? { ...x, title: e.target.value } : x,
-                        ),
-                      })
-                    }
-                  />
-                  <input
-                    value={item.category || ''}
-                    onChange={(e) =>
-                      setContent({
-                        ...content,
-                        blogs: (content.blogs || []).map((x) =>
-                          x.id === item.id ? { ...x, category: e.target.value } : x,
-                        ),
-                      })
-                    }
-                  />
-                  <input
-                    type="date"
-                    value={item.date || ''}
-                    onChange={(e) =>
-                      setContent({
-                        ...content,
-                        blogs: (content.blogs || []).map((x) =>
-                          x.id === item.id ? { ...x, date: e.target.value } : x,
-                        ),
-                      })
-                    }
-                  />
-                  <textarea
-                    className="span-2"
-                    rows="3"
-                    value={item.excerpt || ''}
-                    onChange={(e) =>
-                      setContent({
-                        ...content,
-                        blogs: (content.blogs || []).map((x) =>
-                          x.id === item.id ? { ...x, excerpt: e.target.value } : x,
-                        ),
-                      })
-                    }
-                  />
-                  <textarea
-                    className="span-2"
-                    rows="6"
-                    value={item.content || ''}
-                    onChange={(e) =>
-                      setContent({
-                        ...content,
-                        blogs: (content.blogs || []).map((x) =>
-                          x.id === item.id ? { ...x, content: e.target.value } : x,
-                        ),
-                      })
-                    }
-                  />
-                  <div className="uploader span-2">
-                    <p>Upload Blog Image</p>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={async (e) => {
-                        const file = e.target.files?.[0]
-                        await uploadAndPersist(file, 'blogs', `blog-${item.id}`, (prev, url) => ({
-                          ...prev,
-                          blogs: (prev.blogs || []).map((x) =>
-                            x.id === item.id
-                              ? {
-                                  ...x,
-                                  image: x.image || url,
-                                  images: [...(x.images || (x.image ? [x.image] : [])), url],
-                                }
-                              : x,
-                          ),
-                        }))
-                        e.target.value = ''
-                      }}
-                    />
-                  </div>
-                  {normalizeImages(item).length ? (
-                    <div className="gallery span-2">
-                      {normalizeImages(item).map((img, idx) => (
-                        <div key={`${item.id}-blog-img-${idx}`} className="gallery-item">
-                          <div className="gallery-preview" style={{ backgroundImage: `url(${img})` }} />
-                          <div className="gallery-actions">
-                            <button
-                              type="button"
-                              className="button tiny"
-                              disabled={idx === 0}
-                              onClick={() =>
-                                setContent((prev) => ({
-                                  ...prev,
-                                  blogs: (prev.blogs || []).map((x) => {
-                                    if (x.id !== item.id) return x
-                                    const current = normalizeImages(x)
-                                    const nextImages = moveImage(current, idx, -1)
-                                    return { ...x, images: nextImages, image: nextImages[0] || '' }
-                                  }),
-                                }))
-                              }
-                            >
-                              Move Left
-                            </button>
-                            <button
-                              type="button"
-                              className="button tiny"
-                              disabled={idx === normalizeImages(item).length - 1}
-                              onClick={() =>
-                                setContent((prev) => ({
-                                  ...prev,
-                                  blogs: (prev.blogs || []).map((x) => {
-                                    if (x.id !== item.id) return x
-                                    const current = normalizeImages(x)
-                                    const nextImages = moveImage(current, idx, 1)
-                                    return { ...x, images: nextImages, image: nextImages[0] || '' }
-                                  }),
-                                }))
-                              }
-                            >
-                              Move Right
-                            </button>
-                          </div>
-                          <button
-                            type="button"
-                            className="button ghost tiny"
-                            onClick={() =>
-                              setContent((prev) => ({
-                                ...prev,
-                                blogs: (prev.blogs || []).map((x) => {
-                                  if (x.id !== item.id) return x
-                                  const current = normalizeImages(x)
-                                  const nextImages = current.filter((_, i) => i !== idx)
-                                  return { ...x, images: nextImages, image: nextImages[0] || '' }
-                                }),
-                              }))
-                            }
-                          >
-                            Remove
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-                <div className="row-end">
-                  <button
-                    type="button"
-                    className="button ghost"
-                    onClick={() =>
-                      setContent({
-                        ...content,
-                        blogs: (content.blogs || []).filter((x) => x.id !== item.id),
-                      })
-                    }
-                  >
-                    Delete
-                  </button>
-                </div>
-              </article>
-            ))}
+          <div className="row-end">
+            <button type="button" className="button outline" onClick={() => setShowAddBlog(false)}>
+              Cancel
+            </button>
+            <button type="button" className="button" onClick={addBlog}>
+              Add Blog
+            </button>
           </div>
-        </section>
+        </article>
+      </div>
+    )
+  }
+
+  const switchTab = (tab) => {
+    setActiveTab(tab)
+    setMobileMenuOpen(false)
+  }
+
+  return (
+    <div className="admin-shell">
+      <button
+        type="button"
+        className="admin-menu-toggle"
+        aria-label={mobileMenuOpen ? 'Close admin menu' : 'Open admin menu'}
+        onClick={() => setMobileMenuOpen((prev) => !prev)}
+      >
+        <span className={`burger-icon ${mobileMenuOpen ? 'open' : ''}`} aria-hidden="true">
+          <span />
+          <span />
+          <span />
+        </span>
+      </button>
+
+      {mobileMenuOpen ? (
+        <button
+          type="button"
+          className="admin-backdrop"
+          aria-label="Close menu"
+          onClick={() => setMobileMenuOpen(false)}
+        />
+      ) : null}
+
+      <aside className={`admin-sidebar ${mobileMenuOpen ? 'open' : ''}`}>
+        <h2>Admin</h2>
+        <p>Choose a section, edit content, then save all changes.</p>
+
+        <div className="admin-menu">
+          <button type="button" className={`button ${activeTab === 'hero' ? '' : 'outline'}`} onClick={() => switchTab('hero')}>
+            Hero & Branding
+          </button>
+          <button type="button" className={`button ${activeTab === 'listings' ? '' : 'outline'}`} onClick={() => switchTab('listings')}>
+            Listings
+          </button>
+          <button type="button" className={`button ${activeTab === 'blogs' ? '' : 'outline'}`} onClick={() => switchTab('blogs')}>
+            Blogs
+          </button>
+        </div>
+
+        <Link to="/" className="button outline">
+          Open Website
+        </Link>
+        <button type="button" className="button" onClick={() => saveContent()}>
+          Save All Changes
+        </button>
+        <button type="button" className="button ghost" onClick={onLogout}>
+          Logout
+        </button>
+        {saveState ? <p className="note">{saveState}</p> : null}
+        {uploadState.message ? <p className="note">{uploadState.message}</p> : null}
+      </aside>
+
+      <main className="admin-main">
+        {activeTab === 'hero' ? renderHeroTab() : null}
+        {activeTab === 'listings' ? renderListingsTab() : null}
+        {activeTab === 'blogs' ? renderBlogsTab() : null}
       </main>
+
+      {renderListingModal()}
+      {renderBlogModal()}
     </div>
   )
 }

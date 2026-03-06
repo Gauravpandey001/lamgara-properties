@@ -27,7 +27,7 @@ function AdminLogin({ brand, onLogin, loading }) {
     <div className="auth-wrap">
       <article className="auth-card">
         <h1>{brand} Admin</h1>
-        <p>Login to manage listings, spotlight, and blog content.</p>
+        <p>Login to manage listings, spotlight flags, and blog content.</p>
         <form className="auth-form" onSubmit={submitLogin}>
           <input
             type="text"

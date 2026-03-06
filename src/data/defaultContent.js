@@ -1,6 +1,5 @@
 export const defaultContent = {
   brand: 'Lamgara Properties',
-  navItems: ['Home', 'Properties in Uttarakhand', 'About', 'Blog', 'Contact'],
   propertyTypes: ['All', 'Land for Sale', 'Hotel & Resort', 'Homesites', 'Residential'],
   hero: {
     kicker: 'Buy Properties & Land In Uttarakhand',
@@ -18,7 +17,7 @@ export const defaultContent = {
   listings: [
     {
       id: 'l1',
-      featured: true,
+      spotlight: true,
       status: 'For Sale',
       title: '20-25 Nali Premium Land Near Lake View Point',
       location: 'New Tehri, Uttarakhand',
@@ -37,7 +36,7 @@ export const defaultContent = {
     },
     {
       id: 'l2',
-      featured: true,
+      spotlight: true,
       status: 'New Listing',
       title: 'Road-Touch Plot for Boutique Resort',
       location: 'Chamba, Uttarakhand',
@@ -55,7 +54,7 @@ export const defaultContent = {
     },
     {
       id: 'l3',
-      featured: true,
+      spotlight: false,
       status: 'For Sale',
       title: 'Lake Facing Land with Orchard Access',
       location: 'Pratapnagar, Tehri',
@@ -73,7 +72,7 @@ export const defaultContent = {
     },
     {
       id: 'l4',
-      featured: true,
+      spotlight: false,
       status: 'Hot Listing',
       title: 'Panoramic Valley View Residential Land',
       location: 'Dhanaulti Belt',
@@ -89,12 +88,13 @@ export const defaultContent = {
       ],
       videoIframe: '',
     },
-  ],
-  spotlight: [
     {
-      id: 's1',
+      id: 'l5',
+      spotlight: true,
       title: 'Highway Touch 40 Nali Land Parcel',
       location: 'Gangotri Highway',
+      size: '40 Nali',
+      category: 'Land for Sale',
       description:
         'Large highway-aligned land parcel suited for hospitality, commercial frontage, and long-term holding.',
       price: 'INR 2.8 Cr',
@@ -107,9 +107,12 @@ export const defaultContent = {
       videoIframe: '',
     },
     {
-      id: 's2',
+      id: 'l6',
+      spotlight: true,
       title: 'Lake View Plot With Cottage Potential',
       location: 'Dobra Chanti',
+      size: '',
+      category: 'Homesites',
       description:
         'Scenic lake-view site with cottage-ready topography and high weekend rental demand.',
       price: 'INR 98 L',
@@ -122,9 +125,12 @@ export const defaultContent = {
       videoIframe: '',
     },
     {
-      id: 's3',
+      id: 'l7',
+      spotlight: true,
       title: 'Forest-Edge Homesite For Farm Stay',
       location: 'Tehri Foothills',
+      size: '',
+      category: 'Homesites',
       description:
         'Forest-edge homesite with privacy and climate advantage, ideal for retreat or farm stay concept.',
       price: 'INR 1.16 Cr',
@@ -137,9 +143,12 @@ export const defaultContent = {
       videoIframe: '',
     },
     {
-      id: 's4',
+      id: 'l8',
+      spotlight: true,
       title: 'Investment Land Near Tourist Circuit',
       location: 'Kanatal Road',
+      size: '',
+      category: 'Land for Sale',
       description:
         'Strategic investment lot near tourist route with excellent road visibility and future upside.',
       price: 'INR 1.34 Cr',

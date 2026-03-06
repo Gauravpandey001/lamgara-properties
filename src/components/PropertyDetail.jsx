@@ -15,11 +15,10 @@ const getImages = (item) => {
 }
 
 function PropertyDetail({ content }) {
-  const { type, id } = useParams()
+  const { id } = useParams()
   const [activeImageIndex, setActiveImageIndex] = useState(0)
 
-  const source = type === 'spotlight' ? content.spotlight : content.listings
-  const item = source.find((entry) => entry.id === id)
+  const item = (content.listings || []).find((entry) => entry.id === id)
   const seoTitle = item ? `${item.title} | ${content.brand}` : `Property Not Found | ${content.brand}`
   const seoDescription =
     item?.description ||
@@ -92,18 +91,16 @@ function PropertyDetail({ content }) {
         ) : null}
 
         {videoSrc ? (
-          <article className="card" style={{ marginTop: '1rem', padding: '0.9rem' }}>
+          <article className="card detail-video-card">
             <h3>Property Video</h3>
             <iframe
-              width="560"
-              height="315"
+              className="detail-video"
               src={videoSrc}
               title={`${item.title} video`}
               frameBorder="0"
               allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
               referrerPolicy="strict-origin-when-cross-origin"
               allowFullScreen
-              style={{ width: '100%', borderRadius: '10px' }}
             />
           </article>
         ) : null}
