@@ -358,6 +358,69 @@ textarea {
   line-height: 1.55;
 }
 
+.detail-page {
+  margin-top: 0.75rem;
+  display: grid;
+  gap: 0.85rem;
+}
+
+.detail-back {
+  width: fit-content;
+}
+
+.detail-not-found {
+  padding: 1rem;
+}
+
+.detail-hero-card {
+  background: linear-gradient(170deg, #ffffff, #f5f8fd);
+  border: 1px solid #d7e2ef;
+  box-shadow: 0 14px 34px rgba(24, 39, 60, 0.1);
+}
+
+.detail-top-row {
+  display: flex;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.detail-chip {
+  font-size: 0.78rem;
+  color: #31445e;
+  border-color: #cad6e7;
+  background: #eef3fb;
+}
+
+.detail-meta-grid {
+  margin-top: 0.8rem;
+  display: grid;
+  gap: 0.55rem;
+}
+
+.detail-meta-item {
+  border: 1px solid #d9e3f1;
+  border-radius: 10px;
+  background: #fff;
+  padding: 0.55rem 0.6rem;
+  display: grid;
+  gap: 0.1rem;
+}
+
+.detail-meta-item small {
+  color: #6a7a90;
+}
+
+.detail-meta-item strong {
+  color: #1c2b3f;
+  font-size: 0.95rem;
+}
+
+.detail-thumbs .thumb-item {
+  min-height: 88px;
+  border-radius: 11px;
+}
+
 .page-main {
   margin-top: 0.85rem;
   display: grid;
@@ -741,6 +804,9 @@ textarea {
 .detail-video-card {
   margin-top: 1rem;
   padding: 0.9rem;
+  border: 1px solid #d8e2ef;
+  border-radius: 14px;
+  background: linear-gradient(170deg, #fff, #f3f7fc);
 }
 
 .detail-video {
@@ -748,6 +814,37 @@ textarea {
   aspect-ratio: 16 / 9;
   border: 0;
   border-radius: 10px;
+}
+
+.detail-contact-card {
+  margin-top: 1rem;
+  padding: 1rem;
+  border: 1px solid #d8e2ef;
+  border-radius: 14px;
+  background: linear-gradient(170deg, #fff, #f4f8fd);
+  box-shadow: 0 12px 30px rgba(24, 39, 60, 0.08);
+}
+
+.detail-contact-note {
+  margin: 0.4rem 0 0.7rem;
+  color: var(--muted);
+}
+
+.detail-contact-card .contact-form {
+  margin-top: 0.35rem;
+}
+
+.detail-contact-card .contact-form input,
+.detail-contact-card .contact-form textarea {
+  border-color: #d4deeb;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.detail-contact-card .contact-form input:focus,
+.detail-contact-card .contact-form textarea:focus {
+  outline: 2px solid rgba(216, 76, 50, 0.24);
+  outline-offset: 1px;
 }
 
 @media (min-width: 760px) {
@@ -813,6 +910,29 @@ textarea {
 
   .admin-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .detail-hero-card {
+    display: grid;
+    grid-template-columns: 1.08fr 1fr;
+  }
+
+  .detail-image {
+    min-height: 420px;
+  }
+
+  .detail-body {
+    padding: 1.2rem;
+    display: grid;
+    align-content: start;
+  }
+
+  .detail-body h2 {
+    font-size: 1.9rem;
+  }
+
+  .detail-meta-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 
@@ -895,6 +1015,14 @@ textarea {
   .lp-nav-links {
     max-height: calc(100vh - 64px);
     overflow-y: auto;
+  }
+
+  .detail-body h2 {
+    font-size: 1.45rem;
+  }
+
+  .detail-meta-grid {
+    grid-template-columns: 1fr;
   }
 }
 

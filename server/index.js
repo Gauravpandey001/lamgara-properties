@@ -5,6 +5,7 @@ import crypto from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import cors from 'cors'
 import dotenv from 'dotenv'
+import nodemailer from 'nodemailer'
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import {
@@ -32,6 +33,13 @@ const authSecret = process.env.ADMIN_JWT_SECRET || ''
 const authTokenTtlSeconds = Number(process.env.ADMIN_TOKEN_TTL_SECONDS || 60 * 60 * 12)
 const sitemapPaths = ['/', '/properties', '/about', '/blog', '/contact']
 const nearbyRadiusKm = Number(process.env.SEARCH_NEARBY_RADIUS_KM || 60)
+const inquiryNotificationEmail = (process.env.INQUIRY_NOTIFICATION_EMAIL || 'lamgaraproperties@gmail.com').trim()
+const smtpHost = (process.env.SMTP_HOST || '').trim()
+const smtpPort = Number(process.env.SMTP_PORT || 465)
+const smtpUser = (process.env.SMTP_USER || '').trim()
+const smtpPass = process.env.SMTP_PASS || ''
+const smtpFromEmail = (process.env.SMTP_FROM_EMAIL || smtpUser || inquiryNotificationEmail).trim()
+const smtpSecure = String(process.env.SMTP_SECURE || 'true').toLowerCase() !== 'false'
 
 const requiredEnv = [
   'AWS_REGION',
@@ -51,6 +59,24 @@ const s3 = new S3Client({
 })
 
 const db = await initDb()
+let mailTransporter = null
+
+const getMailTransporter = () => {
+  if (mailTransporter) return mailTransporter
+  if (!smtpHost || !smtpUser || !smtpPass) return null
+
+  mailTransporter = nodemailer.createTransport({
+    host: smtpHost,
+    port: smtpPort,
+    secure: smtpSecure,
+    auth: {
+      user: smtpUser,
+      pass: smtpPass,
+    },
+  })
+
+  return mailTransporter
+}
 
 const parseOrigins = (raw) =>
   (raw || '')
@@ -248,6 +274,13 @@ const toNumberOrNull = (value) => {
 }
 
 const toSafeText = (value) => (typeof value === 'string' ? value : String(value ?? ''))
+const escapeHtml = (value) =>
+  String(value || '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;')
 
 const haversineKm = (aLat, aLon, bLat, bLon) => {
   const toRad = (deg) => (deg * Math.PI) / 180
@@ -373,6 +406,12 @@ app.post('/api/inquiries', async (req, res) => {
   const phone = String(req.body?.phone || '').trim()
   const email = String(req.body?.email || '').trim()
   const message = String(req.body?.message || '').trim()
+  const property = req.body?.property && typeof req.body.property === 'object' ? req.body.property : null
+  const propertyId = String(property?.id || '').trim()
+  const propertyTitle = String(property?.title || '').trim()
+  const propertyLocation = String(property?.location || '').trim()
+  const propertyPrice = String(property?.price || '').trim()
+  const propertyUrl = String(property?.url || '').trim()
 
   if (!name || !phone || !email || !message) {
     res.status(400).json({ error: 'name, phone, email and message are required' })
@@ -389,10 +428,81 @@ app.post('/api/inquiries', async (req, res) => {
     return
   }
 
+  if (propertyUrl && propertyUrl.length > 500) {
+    res.status(400).json({ error: 'Property URL is too long' })
+    return
+  }
+
+  const propertySummary = propertyTitle
+    ? [
+        '[Property Interest]',
+        `Title: ${propertyTitle}`,
+        propertyId ? `ID: ${propertyId}` : null,
+        propertyLocation ? `Location: ${propertyLocation}` : null,
+        propertyPrice ? `Price: ${propertyPrice}` : null,
+        propertyUrl ? `URL: ${propertyUrl}` : null,
+      ]
+        .filter(Boolean)
+        .join('\n')
+    : ''
+  const persistedMessage = propertySummary ? `${propertySummary}\n\n${message}` : message
+
   try {
-    const result = await saveInquiry(db, { name, phone, email, message })
-    res.status(201).json({ ok: true, inquiryId: result.id, createdAt: result.createdAt })
-  } catch {
+    const result = await saveInquiry(db, { name, phone, email, message: persistedMessage })
+
+    let mailSent = false
+    const transporter = getMailTransporter()
+    if (transporter) {
+      try {
+        const escapedName = escapeHtml(name)
+        const escapedPhone = escapeHtml(phone)
+        const escapedEmail = escapeHtml(email)
+        const escapedTitle = escapeHtml(propertyTitle)
+        const escapedId = escapeHtml(propertyId)
+        const escapedLocation = escapeHtml(propertyLocation)
+        const escapedPrice = escapeHtml(propertyPrice)
+        const escapedUrl = escapeHtml(propertyUrl)
+        const escapedMessage = escapeHtml(message).replace(/\n/g, '<br>')
+        const htmlBody = `
+          <h2>New Property Inquiry</h2>
+          <p><strong>Name:</strong> ${escapedName}</p>
+          <p><strong>Phone:</strong> ${escapedPhone}</p>
+          <p><strong>Email:</strong> ${escapedEmail}</p>
+          ${propertyTitle ? `<p><strong>Interested Property:</strong> ${escapedTitle}</p>` : ''}
+          ${propertyId ? `<p><strong>Property ID:</strong> ${escapedId}</p>` : ''}
+          ${propertyLocation ? `<p><strong>Location:</strong> ${escapedLocation}</p>` : ''}
+          ${propertyPrice ? `<p><strong>Price:</strong> ${escapedPrice}</p>` : ''}
+          ${propertyUrl ? `<p><strong>Property Link:</strong> <a href="${escapedUrl}">${escapedUrl}</a></p>` : ''}
+          <p><strong>Message:</strong></p>
+          <p>${escapedMessage}</p>
+          <hr />
+          <p><small>Saved inquiry ID: ${result.id}</small></p>
+        `
+
+        await transporter.sendMail({
+          from: smtpFromEmail,
+          to: inquiryNotificationEmail,
+          replyTo: email,
+          subject: propertyTitle
+            ? `Property Inquiry: ${propertyTitle}`
+            : 'New Inquiry from Lamgara Properties',
+          text: persistedMessage,
+          html: htmlBody,
+        })
+        mailSent = true
+      } catch (mailError) {
+        console.error('Inquiry email delivery failed:', mailError)
+      }
+    }
+
+    res.status(201).json({
+      ok: true,
+      inquiryId: result.id,
+      createdAt: result.createdAt,
+      mailSent,
+    })
+  } catch (error) {
+    console.error('Inquiry save failed:', error)
     res.status(500).json({ error: 'Failed to save inquiry' })
   }
 })
